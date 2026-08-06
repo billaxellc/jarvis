@@ -1,0 +1,25 @@
+{
+  "name": "billaxe-bot-infrastructure",
+  "version": "1.0.0",
+  "description": "AI employee bot ecosystem for BillAxe",
+  "main": "src/manager.js",
+  "scripts": {
+    "start": "node src/manager.js",
+    "dev": "nodemon src/manager.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["billaxe", "bots", "automation"],
+  "author": "billaxe",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.28.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "axios": "^1.7.0",
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.9.13"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
