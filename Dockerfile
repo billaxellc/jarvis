@@ -1,18 +1,18 @@
-FROM node:20-alpine
+FROM node:18-alpine
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies - try npm install first, fall back to basic install
-RUN npm install || npm install --legacy-peer-deps || true
+# Install dependencies with fallback
+RUN npm install --prefer-offline --no-audit || npm install
 
-# Copy app code
+# Copy source code
 COPY src ./src
 
 # Create logs directory
 RUN mkdir -p logs
 
-# Start the manager bot
+# Start the bot manager
 CMD ["npm", "start"]
