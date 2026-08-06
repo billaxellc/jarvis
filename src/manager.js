@@ -1,7 +1,6 @@
 const cron = require('node-cron');
 const { createClient } = require('@supabase/supabase-js');
 const nodemailer = require('nodemailer');
-
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const managerEmail = process.env.MANAGER_EMAIL;
@@ -14,7 +13,6 @@ if (!supabaseUrl || !supabaseKey) {
 }
 
 const supabase = createClient(supabaseUrl, supabaseKey);
-
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -24,9 +22,18 @@ const transporter = nodemailer.createTransport({
 });
 
 const botReports = {};
-
 console.log('[manager-bot] [INFO] BillAxe Bot Manager starting up');
 console.log('[manager-bot] [INFO] Initializing bot schedules');
+
+// TEST BOT: Runs every minute to test if cron is working
+cron.schedule('* * * * *', async () => {
+  try {
+    console.log('[bot-test] [INFO] TEST BOT FIRED - Cron is working!');
+    botReports['bot-test'] = { name: 'Test Bot', status: 'working' };
+  } catch (err) {
+    console.log('[bot-test] [ERROR]', err.message);
+  }
+});
 
 // Bot 1: Bill Retry Supervisor - 9 AM weekdays
 cron.schedule('0 9 * * 1-5', async () => {
@@ -58,8 +65,8 @@ cron.schedule('0 10 * * *', async () => {
   }
 });
 
-// Bot 5: Bill Upload Monitor - every 15 minutes
-cron.schedule('*/15 * * * *', async () => {
+// Bot 5: Bill Upload Monitor - every 5 minutes (changed from 15)
+cron.schedule('*/5 * * * *', async () => {
   try {
     console.log('[bot-5] [INFO] Bill Upload Monitor running');
     const { data: pending } = await supabase
@@ -100,7 +107,6 @@ cron.schedule('30 6 * * *', async () => {
     const reportText = Object.entries(botReports)
       .map(([id, report]) => `${report.name}: ${report.status}`)
       .join('\n');
-    
     await transporter.sendMail({
       from: smtpUser,
       to: managerEmail,
