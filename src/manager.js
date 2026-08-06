@@ -1,93 +1,122 @@
 const cron = require('node-cron');
-const { sendEmail } = require('./mailer');
+const { createClient } = require('@supabase/supabase-js');
+const nodemailer = require('nodemailer');
 
-// Import all bots
-const botBillRetry = require('./bots/bot_bill_retry');
-const botNegotiationTracker = require('./bots/bot_negotiation_tracker');
-const botDailyRevenue = require('./bots/bot_daily_revenue');
-const botDbHealth = require('./bots/bot_db_health');
-const botStaleBills = require('./bots/bot_stale_bills');
-const botUserMetrics = require('./bots/bot_user_metrics');
-const botBlandMonitor = require('./bots/bot_bland_monitor');
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+const managerEmail = process.env.MANAGER_EMAIL;
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
 
-// Report storage
-const reports = {};
-let botRuns = 0;
-
-async function runBot(name, botModule) {
-  try {
-    console.log(`[manager] Running ${name}...`);
-    const result = await botModule.run();
-    reports[name] = { ...result, timestamp: new Date().toISOString() };
-    botRuns++;
-    console.log(`[manager] ${name} complete:`, JSON.stringify(result));
-  } catch (err) {
-    console.error(`[manager] ${name} crashed:`, err.message);
-    reports[name] = { success: false, error: err.message, timestamp: new Date().toISOString() };
-  }
+if (!supabaseUrl || !supabaseKey) {
+  console.error('[manager-bot] [ERROR] Missing Supabase credentials');
+  process.exit(1);
 }
 
-async function sendDailyReport() {
-  const lines = ['BillAxe Daily Bot Report', '========================', ''];
-  
-  for (const [name, result] of Object.entries(reports)) {
-    lines.push(`[${name}]`);
-    lines.push(result.success ? '  Status: OK' : '  Status: FAILED');
-    if (result.error) lines.push(`  Error: ${result.error}`);
-    Object.entries(result).forEach(([k, v]) => {
-      if (!['success', 'error', 'timestamp'].includes(k)) {
-        lines.push(`  ${k}: ${v}`);
-      }
-    });
-    lines.push('');
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: smtpUser,
+    pass: smtpPass
   }
-  
-  lines.push(`Total bot runs today: ${botRuns}`);
-  lines.push(`Report generated: ${new Date().toISOString()}`);
-  
-  await sendEmail('BillAxe Daily Report - ' + new Date().toDateString(), lines.join('\n'));
-}
-
-console.log('[manager] BillAxe Bot Manager starting up...');
-console.log('[manager] Initializing bot schedules...');
-
-// Run DB health every 5 minutes
-cron.schedule('*/5 * * * *', () => runBot('db_health', botDbHealth));
-
-// Run bill retry every hour
-cron.schedule('0 * * * *', () => runBot('bill_retry', botBillRetry));
-
-// Run negotiation tracker every 30 minutes
-cron.schedule('*/30 * * * *', () => runBot('negotiation_tracker', botNegotiationTracker));
-
-// Run daily revenue every 6 hours
-cron.schedule('0 */6 * * *', () => runBot('daily_revenue', botDailyRevenue));
-
-// Run stale bills check every 12 hours
-cron.schedule('0 */12 * * *', () => runBot('stale_bills', botStaleBills));
-
-// Run user metrics every 6 hours
-cron.schedule('0 */6 * * *', () => runBot('user_metrics', botUserMetrics));
-
-// Run bland monitor every 30 minutes
-cron.schedule('*/30 * * * *', () => runBot('bland_monitor', botBlandMonitor));
-
-// Send daily email report at 6 AM
-cron.schedule('0 6 * * *', sendDailyReport);
-
-// Heartbeat every minute
-cron.schedule('* * * * *', () => {
-  console.log(`[manager] Heartbeat — ${new Date().toISOString()} — botRuns: ${botRuns}`);
 });
 
-console.log('[manager] All schedules initialized');
-console.log('[manager] All bots scheduled and ready');
+const botReports = {};
 
-// Run key bots immediately on startup
-setTimeout(async () => {
-  console.log('[manager] Running startup checks...');
-  await runBot('db_health', botDbHealth);
-  await runBot('negotiation_tracker', botNegotiationTracker);
-  await runBot('bland_monitor', botBlandMonitor);
-  console.log('[manager] Startup checks complete');
-}, 5000);
+console.log('[manager-bot] [INFO] BillAxe Bot Manager starting up');
+console.log('[manager-bot] [INFO] Initializing bot schedules');
+
+// Bot 1: Bill Retry Supervisor - 9 AM weekdays
+cron.schedule('0 9 * * 1-5', async () => {
+  try {
+    console.log('[bot-1] [INFO] Bill Retry Supervisor running');
+    const { data: bills } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .eq('status', 'pending_retry');
+    botReports['bot-1'] = { name: 'Bill Retry Supervisor', status: 'success', count: bills?.length || 0 };
+  } catch (err) {
+    botReports['bot-1'] = { name: 'Bill Retry Supervisor', status: 'error', error: err.message };
+    console.log('[bot-1] [ERROR]', err.message);
+  }
+});
+
+// Bot 3: Negotiation Success Tracker - 10 AM daily
+cron.schedule('0 10 * * *', async () => {
+  try {
+    console.log('[bot-3] [INFO] Negotiation Success Tracker running');
+    const { data: completed } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .eq('status', 'completed');
+    botReports['bot-3'] = { name: 'Negotiation Success Tracker', status: 'success', count: completed?.length || 0 };
+  } catch (err) {
+    botReports['bot-3'] = { name: 'Negotiation Success Tracker', status: 'error', error: err.message };
+    console.log('[bot-3] [ERROR]', err.message);
+  }
+});
+
+// Bot 5: Bill Upload Monitor - every 15 minutes
+cron.schedule('*/15 * * * *', async () => {
+  try {
+    console.log('[bot-5] [INFO] Bill Upload Monitor running');
+    const { data: pending } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .eq('status', 'pending');
+    botReports['bot-5'] = { name: 'Bill Upload Monitor', status: 'success', pending: pending?.length || 0 };
+  } catch (err) {
+    botReports['bot-5'] = { name: 'Bill Upload Monitor', status: 'error', error: err.message };
+    console.log('[bot-5] [ERROR]', err.message);
+  }
+});
+
+// Bot 7: Daily Revenue - 6 AM
+cron.schedule('0 6 * * *', async () => {
+  try {
+    console.log('[bot-7] [INFO] Daily Revenue Report running');
+    const { data: completed } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .eq('status', 'completed');
+    botReports['bot-7'] = { name: 'Daily Revenue Report', status: 'success', count: completed?.length || 0 };
+  } catch (err) {
+    botReports['bot-7'] = { name: 'Daily Revenue Report', status: 'error', error: err.message };
+    console.log('[bot-7] [ERROR]', err.message);
+  }
+});
+
+// Manager heartbeat
+cron.schedule('* * * * *', () => {
+  console.log('[manager-bot] [0]', Object.keys(botReports).length, 'reports');
+});
+
+// Manager daily report - 6:30 AM
+cron.schedule('30 6 * * *', async () => {
+  try {
+    console.log('[manager-bot] [INFO] Sending daily report');
+    const reportText = Object.entries(botReports)
+      .map(([id, report]) => `${report.name}: ${report.status}`)
+      .join('\n');
+    
+    await transporter.sendMail({
+      from: smtpUser,
+      to: managerEmail,
+      subject: `BillAxe Daily Report - ${new Date().toLocaleDateString()}`,
+      text: reportText
+    });
+    console.log('[manager-bot] [INFO] Report sent');
+  } catch (err) {
+    console.log('[manager-bot] [ERROR]', err.message);
+  }
+});
+
+console.log('[manager-bot] [INFO] All schedules initialized');
+console.log('[manager-bot] [INFO] All bots scheduled and ready');
+
+process.on('SIGTERM', () => {
+  console.log('[manager-bot] [INFO] Shutting down gracefully');
+  process.exit(0);
+});
