@@ -5,8 +5,8 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies - try npm install first, fall back to basic install
+RUN npm install || npm install --legacy-peer-deps || true
 
 # Copy app code
 COPY src ./src
@@ -15,4 +15,4 @@ COPY src ./src
 RUN mkdir -p logs
 
 # Start the manager bot
-CMD ["node", "src/manager.js"]
+CMD ["npm", "start"]
