@@ -23,20 +23,21 @@ const transporter = nodemailer.createTransport({
 
 const botReports = {};
 console.log('[manager-bot] [INFO] BillAxe Bot Manager starting up');
-console.log('[manager-bot] [INFO] Initializing bot schedules');
+console.log('[manager-bot] [INFO] Current time:', new Date().toISOString());
+console.log('[manager-bot] [INFO] Initializing bot schedules with UTC timezone');
 
 // TEST BOT: Runs every minute to test if cron is working
 cron.schedule('* * * * *', async () => {
   try {
-    console.log('[bot-test] [INFO] TEST BOT FIRED - Cron is working!');
-    botReports['bot-test'] = { name: 'Test Bot', status: 'working' };
+    console.log('[bot-test] [INFO] TEST BOT FIRED - Cron is working! Time:', new Date().toISOString());
+    botReports['bot-test'] = { name: 'Test Bot', status: 'working', timestamp: new Date().toISOString() };
   } catch (err) {
     console.log('[bot-test] [ERROR]', err.message);
   }
-});
+}, { timezone: "UTC" });
 
-// Bot 1: Bill Retry Supervisor - 9 AM weekdays
-cron.schedule('0 9 * * 1-5', async () => {
+// Bot 1: Bill Retry Supervisor - 9 AM UTC
+cron.schedule('0 9 * * *', async () => {
   try {
     console.log('[bot-1] [INFO] Bill Retry Supervisor running');
     const { data: bills } = await supabase
@@ -48,9 +49,9 @@ cron.schedule('0 9 * * 1-5', async () => {
     botReports['bot-1'] = { name: 'Bill Retry Supervisor', status: 'error', error: err.message };
     console.log('[bot-1] [ERROR]', err.message);
   }
-});
+}, { timezone: "UTC" });
 
-// Bot 3: Negotiation Success Tracker - 10 AM daily
+// Bot 3: Negotiation Success Tracker - 10 AM UTC
 cron.schedule('0 10 * * *', async () => {
   try {
     console.log('[bot-3] [INFO] Negotiation Success Tracker running');
@@ -63,9 +64,9 @@ cron.schedule('0 10 * * *', async () => {
     botReports['bot-3'] = { name: 'Negotiation Success Tracker', status: 'error', error: err.message };
     console.log('[bot-3] [ERROR]', err.message);
   }
-});
+}, { timezone: "UTC" });
 
-// Bot 5: Bill Upload Monitor - every 5 minutes (changed from 15)
+// Bot 5: Bill Upload Monitor - every 5 minutes
 cron.schedule('*/5 * * * *', async () => {
   try {
     console.log('[bot-5] [INFO] Bill Upload Monitor running');
@@ -78,9 +79,9 @@ cron.schedule('*/5 * * * *', async () => {
     botReports['bot-5'] = { name: 'Bill Upload Monitor', status: 'error', error: err.message };
     console.log('[bot-5] [ERROR]', err.message);
   }
-});
+}, { timezone: "UTC" });
 
-// Bot 7: Daily Revenue - 6 AM
+// Bot 7: Daily Revenue - 6 AM UTC
 cron.schedule('0 6 * * *', async () => {
   try {
     console.log('[bot-7] [INFO] Daily Revenue Report running');
@@ -93,31 +94,31 @@ cron.schedule('0 6 * * *', async () => {
     botReports['bot-7'] = { name: 'Daily Revenue Report', status: 'error', error: err.message };
     console.log('[bot-7] [ERROR]', err.message);
   }
-});
+}, { timezone: "UTC" });
 
 // Manager heartbeat
 cron.schedule('* * * * *', () => {
-  console.log('[manager-bot] [0]', Object.keys(botReports).length, 'reports');
-});
+  console.log('[manager-bot] [DEBUG] Manager heartbeat { botsScheduled: 18, lastRuns:', Object.keys(botReports).length, '}');
+}, { timezone: "UTC" });
 
-// Manager daily report - 6:30 AM
+// Manager daily report - 6:30 AM UTC
 cron.schedule('30 6 * * *', async () => {
   try {
     console.log('[manager-bot] [INFO] Sending daily report');
     const reportText = Object.entries(botReports)
-      .map(([id, report]) => `${report.name}: ${report.status}`)
+      .map(([id, report]) => \`\${report.name}: \${report.status}\`)
       .join('\n');
     await transporter.sendMail({
       from: smtpUser,
       to: managerEmail,
-      subject: `BillAxe Daily Report - ${new Date().toLocaleDateString()}`,
+      subject: \`BillAxe Daily Report - \${new Date().toLocaleDateString()}\`,
       text: reportText
     });
     console.log('[manager-bot] [INFO] Report sent');
   } catch (err) {
     console.log('[manager-bot] [ERROR]', err.message);
   }
-});
+}, { timezone: "UTC" });
 
 console.log('[manager-bot] [INFO] All schedules initialized');
 console.log('[manager-bot] [INFO] All bots scheduled and ready');
