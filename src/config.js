@@ -3,7 +3,8 @@ require('dotenv').config();
 module.exports = {
   supabase: {
     url: process.env.SUPABASE_URL,
-    key: process.env.SUPABASE_KEY,
+    key: process.env.SUPABASE_SERVICE_KEY, // Use service key for privileged operations
+    anonKey: process.env.SUPABASE_ANON_KEY,
   },
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY,

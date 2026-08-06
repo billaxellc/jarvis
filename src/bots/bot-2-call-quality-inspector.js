@@ -1,7 +1,5 @@
 const Logger = require('../logger');
 const { query } = require('../db');
-const axios = require('axios');
-const config = require('../config');
 
 const logger = new Logger('bot-2-call-quality-inspector');
 
@@ -9,48 +7,33 @@ async function run() {
   try {
     logger.info('Starting call quality inspection');
 
-    // Get call logs from Bland.ai for last 24 hours
-    const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    // Get calls from last 24 hours
+    const bills = await query('bills');
+    const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    
+    const recentCalls = bills.filter(b => 
+      b.bland_call_id && new Date(b.updated_at) > last24h
+    );
 
-    // Query Bland.ai for recent calls
-    const response = await axios.get('https://api.bland.ai/calls', {
-      headers: {
-        authorization: config.bland.apiKey,
-      },
-      params: {
-        created_at_gt: twentyFourHoursAgo.toISOString(),
-      },
-    });
+    logger.info(`Inspecting ${recentCalls.length} calls from last 24h`);
 
-    const calls = response.data.calls || [];
+    const failedCalls = recentCalls.filter(b => b.status === 'failed');
+    const droppedCalls = recentCalls.filter(b => b.status === 'call_dropped');
+    const successCalls = recentCalls.filter(b => b.status === 'completed');
 
-    const issues = {
-      dropped: [],
-      failed: [],
-      earlyHangup: [],
-      total: calls.length,
-    };
-
-    for (const call of calls) {
-      if (call.status === 'dropped') {
-        issues.dropped.push(call.id);
-      } else if (call.status === 'failed') {
-        issues.failed.push(call.id);
-      } else if (call.duration < 30) {
-        // Early hangup if less than 30 seconds
-        issues.earlyHangup.push(call.id);
-      }
-    }
-
-    logger.info('Call quality inspection complete', issues);
-
-    return {
-      status: 'success',
-      issues,
+    const report = {
+      totalCalls: recentCalls.length,
+      successCalls: successCalls.length,
+      failedCalls: failedCalls.length,
+      droppedCalls: droppedCalls.length,
+      successRate: recentCalls.length > 0 ? ((successCalls.length / recentCalls.length) * 100).toFixed(1) : '0.0',
       timestamp: new Date().toISOString(),
     };
+
+    logger.info('Call quality inspection complete', report);
+    return report;
   } catch (error) {
-    logger.error('Bot failed', { error: error.message, stack: error.stack });
+    logger.error('Bot-2 failed', { error: error.message });
     throw error;
   }
 }

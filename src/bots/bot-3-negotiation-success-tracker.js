@@ -7,46 +7,38 @@ async function run() {
   try {
     logger.info('Starting negotiation success tracking');
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    // Get all bills completed today
-    const completedBills = await query('bills', { status: 'completed' });
+    // Get all completed bills from last 24 hours
+    const bills = await query('bills', { status: 'completed' });
     
-    const todaysBills = completedBills.filter(bill => {
-      const billDate = new Date(bill.updated_at);
-      billDate.setHours(0, 0, 0, 0);
-      return billDate.getTime() === today.getTime();
-    });
+    const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const completedToday = bills.filter(b => new Date(b.updated_at) > last24h);
 
-    // Calculate savings by category
-    const savingsByCategory = {};
+    logger.info(`Found ${completedToday.length} bills completed in last 24h`);
+
+    // Calculate total savings
     let totalSavings = 0;
+    const byCategory = {};
 
-    for (const bill of todaysBills) {
-      const category = bill.category || 'unknown';
-      const savings = bill.savings_amount || 0;
-      
-      savingsByCategory[category] = (savingsByCategory[category] || 0) + savings;
+    for (const bill of completedToday) {
+      const savings = (bill.original_amount || 0) - (bill.final_amount || 0);
       totalSavings += savings;
+
+      const category = bill.provider_name || 'unknown';
+      byCategory[category] = (byCategory[category] || 0) + savings;
     }
 
     const report = {
-      billsCompleted: todaysBills.length,
-      totalSavings,
-      savingsByCategory,
-      averageSavingsPerBill: todaysBills.length > 0 ? totalSavings / todaysBills.length : 0,
-    };
-
-    logger.info('Negotiation success report', report);
-
-    return {
-      status: 'success',
-      report,
+      billsCompleted: completedToday.length,
+      totalSavings: totalSavings.toFixed(2),
+      averageSavingsPerBill: completedToday.length > 0 ? (totalSavings / completedToday.length).toFixed(2) : '0.00',
+      byCategory,
       timestamp: new Date().toISOString(),
     };
+
+    logger.info('Negotiation tracking complete', report);
+    return report;
   } catch (error) {
-    logger.error('Bot failed', { error: error.message, stack: error.stack });
+    logger.error('Bot-3 failed', { error: error.message });
     throw error;
   }
 }

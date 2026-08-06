@@ -7,41 +7,34 @@ async function run() {
   try {
     logger.info('Starting daily revenue report');
 
+    // Get all bills from today
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const allBills = await query('bills', { status: 'completed' });
+    const bills = await query('bills');
+    const billsToday = bills.filter(b => new Date(b.created_at) >= today);
 
-    const todaysBills = allBills.filter(bill => {
-      const billDate = new Date(bill.updated_at);
-      billDate.setHours(0, 0, 0, 0);
-      return billDate.getTime() === today.getTime();
-    });
-
-    // Calculate metrics
-    const totalSavings = todaysBills.reduce((sum, bill) => sum + (bill.savings_amount || 0), 0);
-    const avgSavingsPerBill = todaysBills.length > 0 ? totalSavings / todaysBills.length : 0;
-
-    // Estimate MRR impact (assuming customer lifetime value)
-    const mrrImpact = todaysBills.length * 10; // $10 per successful negotiation
+    // Calculate revenue metrics
+    const completed = billsToday.filter(b => b.status === 'completed');
+    const totalSavings = completed.reduce((sum, b) => sum + ((b.original_amount || 0) - (b.final_amount || 0)), 0);
+    
+    // Estimate revenue (assume 15% of savings as revenue)
+    const estimatedRevenue = totalSavings * 0.15;
 
     const report = {
       date: today.toISOString().split('T')[0],
-      billsNegotiated: todaysBills.length,
-      totalSavings,
-      averageSavingsPerBill: avgSavingsPerBill.toFixed(2),
-      estimatedMRRImpact: mrrImpact,
-    };
-
-    logger.info('Daily revenue report', report);
-
-    return {
-      status: 'success',
-      report,
+      billsNegotiated: billsToday.length,
+      billsCompleted: completed.length,
+      totalSavings: totalSavings.toFixed(2),
+      estimatedRevenue: estimatedRevenue.toFixed(2),
+      successRate: billsToday.length > 0 ? ((completed.length / billsToday.length) * 100).toFixed(1) : '0.0',
       timestamp: new Date().toISOString(),
     };
+
+    logger.info('Daily revenue report generated', report);
+    return report;
   } catch (error) {
-    logger.error('Bot failed', { error: error.message, stack: error.stack });
+    logger.error('Bot-7 failed', { error: error.message });
     throw error;
   }
 }

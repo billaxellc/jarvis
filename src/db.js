@@ -12,15 +12,15 @@ function initializeDB() {
 
 async function query(table, filters = {}) {
   const db = initializeDB();
-  let query = db.from(table).select('*');
+  let q = db.from(table).select('*');
 
   Object.keys(filters).forEach((key) => {
-    query = query.eq(key, filters[key]);
+    q = q.eq(key, filters[key]);
   });
 
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
+  const { data, error } = await q;
+  if (error) throw new Error(`Supabase query error: ${error.message}`);
+  return data || [];
 }
 
 async function update(table, id, data) {
@@ -31,7 +31,7 @@ async function update(table, id, data) {
     .eq('id', id)
     .select();
 
-  if (error) throw error;
+  if (error) throw new Error(`Supabase update error: ${error.message}`);
   return result;
 }
 
@@ -42,8 +42,15 @@ async function insert(table, data) {
     .insert([data])
     .select();
 
-  if (error) throw error;
+  if (error) throw new Error(`Supabase insert error: ${error.message}`);
   return result;
+}
+
+async function queryRaw(sql) {
+  const db = initializeDB();
+  const { data, error } = await db.rpc('execute_sql', { sql_query: sql });
+  if (error) throw new Error(`Supabase RPC error: ${error.message}`);
+  return data;
 }
 
 module.exports = {
@@ -51,4 +58,5 @@ module.exports = {
   query,
   update,
   insert,
+  queryRaw,
 };
