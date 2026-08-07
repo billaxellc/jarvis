@@ -1,62 +1,12 @@
-/**
- * Bot 3: Negotiation Success Tracker
- * Runs: Daily 12 PM
- * Counts bills moved to completed
- * Calculates average savings per category
- */
-
-const { createClient } = require('@supabase/supabase-js');
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const { query } = require('../db-helper');
 
 async function run() {
   try {
-    console.log('[bot-03] [INFO] Starting: Negotiation Success Tracker');
-    
-    // Get completed negotiations from last 24 hours
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const { data: completed, error } = await supabase
-      .from('uploaded_bills')
-      .select('*')
-      .eq('status', 'negotiation_complete')
-      .gte('updated_at', yesterday);
-    
-    if (error) {
-      console.log(`[bot-03] [ERROR] Query failed: ${error.message}`);
-      return { success: false, error: error.message };
-    }
-    
-    // Calculate totals and savings by category
-    const stats = {
-      total_completed: completed?.length || 0,
-      total_bills_processed: 0,
-      total_amount: 0,
-      by_category: {}
-    };
-    
-    for (const bill of completed || []) {
-      stats.total_bills_processed++;
-      stats.total_amount += bill.amount || 0;
-      
-      const cat = bill.bill_type || 'unknown';
-      if (!stats.by_category[cat]) {
-        stats.by_category[cat] = { count: 0, total: 0, avg: 0 };
-      }
-      stats.by_category[cat].count++;
-      stats.by_category[cat].total += bill.amount || 0;
-      stats.by_category[cat].avg = stats.by_category[cat].total / stats.by_category[cat].count;
-    }
-    
-    // Estimate savings (assume 10% avg discount)
-    const estimatedSavings = stats.total_amount * 0.10;
-    
-    console.log(`[bot-03] [SUCCESS] ${stats.total_completed} negotiations completed - Est. savings: $${estimatedSavings.toFixed(2)}`);
-    return { success: true, ...stats, estimated_savings: estimatedSavings };
+    const bills = await query(`SELECT COUNT(*) as count, SUM(amount) as total FROM uploaded_bills WHERE status = 'negotiation_complete' AND created_at > NOW() - INTERVAL '7 days'`);
+    const savings = bills[0].total ? (bills[0].total * 0.15).toFixed(2) : 0;
+    return { name: 'Negotiation Success Tracker', status: 'success', successfulNegotiations: bills[0].count, estimatedSavings: savings };
   } catch (err) {
-    console.log(`[bot-03] [FATAL] ${err.message}`);
-    return { success: false, error: err.message };
+    return { name: 'Negotiation Success Tracker', status: 'failed', error: err.message };
   }
 }
-
 module.exports = { run };
