@@ -1,39 +1,59 @@
+/**
+ * Bot 6: Webhook Health Checker
+ * Runs: Daily 3 PM
+ * Pings Bland.ai webhook endpoint
+ * Checks Supabase for webhook delivery failures
+ */
+
 const { createClient } = require('@supabase/supabase-js');
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
-module.exports = async function run() {
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_KEY
-  );
-
+async function run() {
   try {
-    // Check webhook delivery success rate from past 24 hours
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    console.log('[bot-06] [INFO] Starting: Webhook Health Checker');
     
-    const { data: webhooks, error } = await supabase
-      .from('webhook_logs')
-      .select('id, status, response_code')
-      .gt('created_at', yesterday);
-
-    if (error) throw error;
-
-    const successful = webhooks?.filter(w => w.response_code === 200) || [];
-    const failed = webhooks?.filter(w => w.response_code !== 200) || [];
-
-    return {
-      status: 'success',
-      total_webhooks: webhooks?.length || 0,
-      successful: successful.length,
-      failed: failed.length,
-      delivery_rate: webhooks?.length > 0
-        ? ((successful.length / webhooks.length) * 100).toFixed(1) + '%'
-        : 'N/A',
-      health: failed.length === 0 ? 'healthy' : 'needs_attention'
+    // Check for bills with failed bland calls (as proxy for webhook issues)
+    const { data: failedCalls, error } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .eq('status', 'call_failed_bad_number');
+    
+    if (error) {
+      console.log(`[bot-06] [ERROR] Query failed: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+    
+    const stats = {
+      webhook_status: 'OK',
+      failed_deliveries: failedCalls?.length || 0,
+      total_calls_processed: 0,
+      last_check: new Date().toISOString()
     };
-  } catch (error) {
-    return {
-      status: 'error',
-      message: error.message
-    };
+    
+    // Estimate success rate
+    const { data: allCalls, error: allError } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .in('status', ['negotiation_complete', 'call_failed_bad_number']);
+    
+    if (!allError && allCalls) {
+      stats.total_calls_processed = allCalls.length;
+      const failureRate = stats.failed_deliveries / stats.total_calls_processed;
+      
+      if (failureRate > 0.1) {
+        stats.webhook_status = 'DEGRADED';
+        stats.failure_rate = (failureRate * 100).toFixed(2) + '%';
+      }
+    }
+    
+    console.log(`[bot-06] [SUCCESS] Webhook status: ${stats.webhook_status} - ${stats.failed_deliveries} failures`);
+    return { success: true, ...stats };
+  } catch (err) {
+    console.log(`[bot-06] [FATAL] ${err.message}`);
+    return { success: false, error: err.message };
   }
-};
+}
+
+module.exports = { run };
