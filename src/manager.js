@@ -1,5 +1,5 @@
 /**
- * MANAGER.JS - BillAxe Bot Orchestration
+ * MANAGER.JS - BillAxe Bot Orchestration (FIXED VERSION)
  * Loads all 19 bots, schedules them on correct times, executes them
  * Sends daily email report with all findings
  */
@@ -27,31 +27,71 @@ if (emailUser && emailPass) {
   });
 }
 
-// Load all bot files from ./bots directory
+// Load all bot files from ./bots directory with better error handling
 function loadBots() {
-  const botsDir = path.join(__dirname, 'src', 'bots');
-  const botFiles = fs.readdirSync(botsDir).filter(f => f.startsWith('bot-') && f.endsWith('.js'));
+  // Try multiple possible paths
+  const possiblePaths = [
+    path.join(__dirname, 'bots'),
+    path.join(__dirname, 'src', 'bots'),
+    path.join(process.cwd(), 'src', 'bots'),
+    path.join('/app', 'src', 'bots'),  // Railway standard path
+    path.join('/src', 'bots'),
+    'src/bots'
+  ];
   
-  const bots = {};
-  for (const file of botFiles) {
+  let botsDir = null;
+  for (const tryPath of possiblePaths) {
     try {
-      const botPath = path.join(botsDir, file);
-      delete require.cache[require.resolve(botPath)];
-      const bot = require(botPath);
-      const botName = file.replace('.js', '');
-      bots[botName] = { module: bot, file };
-      console.log(`[manager-bot] [LOAD] Loaded ${botName}`);
+      if (fs.existsSync(tryPath)) {
+        botsDir = tryPath;
+        console.log(`[manager-bot] [FOUND] Bots directory at: ${botsDir}`);
+        break;
+      }
     } catch (e) {
-      console.log(`[manager-bot] [ERROR] Failed to load ${file}: ${e.message}`);
+      // Continue to next path
     }
   }
-  return bots;
+  
+  if (!botsDir) {
+    console.log(`[manager-bot] [ERROR] Could not find bots directory. Tried: ${possiblePaths.join(', ')}`);
+    console.log(`[manager-bot] [INFO] Current working directory: ${process.cwd()}`);
+    console.log(`[manager-bot] [INFO] __dirname: ${__dirname}`);
+    return {};
+  }
+  
+  try {
+    const botFiles = fs.readdirSync(botsDir).filter(f => f.startsWith('bot-') && f.endsWith('.js'));
+    console.log(`[manager-bot] [FOUND] ${botFiles.length} bot files in directory`);
+    
+    const bots = {};
+    for (const file of botFiles) {
+      try {
+        const botPath = path.join(botsDir, file);
+        delete require.cache[require.resolve(botPath)];
+        const bot = require(botPath);
+        const botName = file.replace('.js', '');
+        bots[botName] = { module: bot, file };
+        console.log(`[manager-bot] [LOAD] Loaded ${botName}`);
+      } catch (e) {
+        console.log(`[manager-bot] [ERROR] Failed to load ${file}: ${e.message}`);
+      }
+    }
+    return bots;
+  } catch (err) {
+    console.log(`[manager-bot] [ERROR] Failed to read bots directory: ${err.message}`);
+    return {};
+  }
 }
 
 const bots = loadBots();
 
 // Schedule each bot
 function scheduleBots() {
+  if (Object.keys(bots).length === 0) {
+    console.log('[manager-bot] [WARNING] No bots loaded, scheduling will be empty');
+    return;
+  }
+  
   // Bot 1: Bill Retry Supervisor - Daily 8 AM
   if (bots['bot-01-bill-retry']) {
     cron.schedule('0 8 * * *', async () => {
@@ -275,10 +315,12 @@ async function sendDailyReport() {
 setInterval(() => {
   const successCount = Array.from(botReports.values()).filter(r => r.status === 'SUCCESS').length;
   const failCount = botErrors.size;
-  console.log(`[manager-bot] [HEARTBEAT] Bots: ${Object.keys(bots).length} scheduled | Success: ${successCount} | Failed: ${failCount}`);
+  const loadedBots = Object.keys(bots).length;
+  console.log(`[manager-bot] [HEARTBEAT] Bots loaded: ${loadedBots} | Scheduled: ${loadedBots} | Success: ${successCount} | Failed: ${failCount}`);
 }, 60000);
 
 console.log('[manager-bot] [INFO] BillAxe Bot Manager starting up');
+console.log('[manager-bot] [INFO] Current directory: ' + process.cwd());
 scheduleBots();
 console.log('[manager-bot] [INFO] All bot schedules initialized and ready');
-console.log('[manager-bot] [INFO] 19 bots scheduled and monitoring');
+console.log(`[manager-bot] [INFO] ${Object.keys(bots).length} bots loaded and monitoring`);
