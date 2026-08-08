@@ -6,5 +6,6 @@ COPY package*.json ./
 RUN npm install --production
 
 COPY src ./src
+COPY manager.js ./manager.js
 
-CMD ["node", "src/manager.js"]
+CMD ["node", "manager.js"]
