@@ -1,9 +1,9 @@
 {
   "name": "billaxe-bot-manager",
   "version": "1.0.0",
-  "main": "manager.js",
+  "main": "src/manager.js",
   "scripts": {
-    "start": "node manager.js"
+    "start": "node src/manager.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
