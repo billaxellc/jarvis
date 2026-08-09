@@ -1,6 +1,6 @@
 /**
  * Bot 3: Negotiation Success Tracker
- * Runs: Daily 12 PM
+ * Runs: Daily 12 PM UTC (5 AM Phoenix)
  * Counts bills moved to completed
  * Calculates average savings per category
  */
@@ -20,7 +20,7 @@ async function run() {
       .from('uploaded_bills')
       .select('*')
       .eq('status', 'negotiation_complete')
-      .gte('updated_at', yesterday);
+      .gte('created_at', yesterday);
     
     if (error) {
       console.log(`[bot-03] [ERROR] Query failed: ${error.message}`);
