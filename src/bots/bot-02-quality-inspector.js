@@ -1,6 +1,6 @@
 /**
  * Bot 2: Call Quality Inspector
- * Runs: Daily 10 AM
+ * Runs: Daily 10 AM UTC (3 AM Phoenix)
  * Reads last 24hrs of Bland.ai call logs
  * Flags dropped calls, failed connections, early hangups
  */
@@ -20,7 +20,7 @@ async function run() {
       .from('uploaded_bills')
       .select('*')
       .in('status', ['negotiation_complete', 'call_failed_bad_number'])
-      .gte('updated_at', yesterday);
+      .gte('created_at', yesterday);
     
     if (error) {
       console.log(`[bot-02] [ERROR] Query failed: ${error.message}`);
