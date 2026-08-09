@@ -12,7 +12,6 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// BillAxe API base URL — the Replit app
 const BILLAXE_API = process.env.BILLAXE_API_URL || 'https://billaxe.app';
 const BILLAXE_BOT_SECRET = process.env.BILLAXE_BOT_SECRET;
 
@@ -20,7 +19,6 @@ async function run() {
   try {
     console.log('[bot-01] [INFO] Starting: Bill Retry Supervisor');
 
-    // Find bills past their retry window
     const { data: bills, error } = await supabase
       .from('uploaded_bills')
       .select('*')
@@ -44,7 +42,6 @@ async function run() {
       const newAttemptCount = (bill.attempt_count || 0) + 1;
 
       if (newAttemptCount > 5) {
-        // Max attempts reached — mark as failed
         await supabase
           .from('uploaded_bills')
           .update({ status: 'call_failed', attempt_count: newAttemptCount })
@@ -54,10 +51,9 @@ async function run() {
       }
 
       try {
-        // Hit the reset endpoint — this triggers triggerUtilityNegotiation internally
         const response = await axios.post(
           `${BILLAXE_API}/api/bills/uploaded/${bill.id}/reset`,
-          {},
+          { user_id: bill.user_id },
           {
             headers: {
               'Content-Type': 'application/json',
@@ -68,7 +64,6 @@ async function run() {
         );
 
         if (response.data?.ok) {
-          // Increment attempt count
           await supabase
             .from('uploaded_bills')
             .update({ attempt_count: newAttemptCount })
@@ -77,7 +72,7 @@ async function run() {
           console.log(`[bot-01] [RETRIGGER] Bill ${bill.id} (${bill.provider_name}) fired — attempt ${newAttemptCount}`);
           retriggered++;
         } else {
-          console.log(`[bot-01] [WARN] Reset endpoint returned unexpected response for bill ${bill.id}:`, response.data);
+          console.log(`[bot-01] [WARN] Unexpected response for bill ${bill.id}:`, response.data);
         }
       } catch (callErr) {
         console.log(`[bot-01] [ERROR] Failed to trigger bill ${bill.id}: ${callErr.message}`);
