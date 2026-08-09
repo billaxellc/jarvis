@@ -114,8 +114,8 @@ async function executeBotSafely(botName, botObj) {
 
 function scheduleBots() {
   if (bots['bot-01-bill-retry']) {
-    cron.schedule('0 8 * * *', () => executeBotSafely('bot-01-bill-retry', bots['bot-01-bill-retry']));
-    console.log('[manager-bot] [SCHEDULE] bot-01 @ 8:00 AM UTC (1 AM Phoenix)');
+    cron.schedule('0 16 * * *', () => executeBotSafely('bot-01-bill-retry', bots['bot-01-bill-retry']));
+    console.log('[manager-bot] [SCHEDULE] bot-01 @ 4:00 PM UTC (9 AM Phoenix)');
   }
   if (bots['bot-02-quality-inspector']) {
     cron.schedule('0 10 * * *', () => executeBotSafely('bot-02-quality-inspector', bots['bot-02-quality-inspector']));
