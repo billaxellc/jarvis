@@ -1,6 +1,6 @@
 /**
  * Bot 7: Daily Revenue Report Bot
- * Runs: Daily 11 PM
+ * Runs: Daily 11 PM UTC (4 PM Phoenix)
  * Total bills negotiated, total savings generated, MRR impact
  */
 
@@ -22,7 +22,7 @@ async function run() {
       .from('uploaded_bills')
       .select('*')
       .eq('status', 'negotiation_complete')
-      .gte('updated_at', todayStr);
+      .gte('created_at', todayStr);
     
     if (error) {
       console.log(`[bot-07] [ERROR] Query failed: ${error.message}`);
