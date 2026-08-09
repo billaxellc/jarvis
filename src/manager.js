@@ -3,7 +3,6 @@
  * Loads all 19 bots, schedules them on correct times, executes them
  * Sends daily email report with all findings
  */
-
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
@@ -50,38 +49,60 @@ function loadBots() {
 
 const bots = loadBots();
 
+// Send test email on startup to verify email system works
+async function sendStartupTest() {
+  if (!transporter) {
+    console.log('[manager-bot] [WARNING] Email not configured, skipping startup test');
+    return;
+  }
+  
+  try {
+    const mailOptions = {
+      from: 'billaxellc@gmail.com',
+      to: 'billaxellc@gmail.com',
+      subject: 'BillAxe Bot Manager - STARTUP TEST',
+      text: `Bot manager started successfully at ${new Date().toISOString()}\n\nEmail system is working.`
+    };
+    
+    await transporter.sendMail(mailOptions);
+    console.log('[manager-bot] [EMAIL] Startup test email sent');
+  } catch (err) {
+    console.log(`[manager-bot] [EMAIL_ERROR] Failed to send startup test: ${err.message}`);
+  }
+}
+
 // Schedule each bot
 function scheduleBots() {
-  // Bot 1: Bill Retry Supervisor - Daily 8 AM
+  // Bot 1: Bill Retry Supervisor - Daily 8 AM UTC
   if (bots['bot-01-bill-retry']) {
     cron.schedule('0 8 * * *', async () => {
       await executeBotSafely('bot-01-bill-retry', bots['bot-01-bill-retry']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-01 @ 8:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-01 @ 8:00 AM UTC (1 AM Phoenix)');
   }
   
-  // Bot 2: Call Quality Inspector - Daily 10 AM
+  // Bot 2: Call Quality Inspector - Daily 10 AM UTC
   if (bots['bot-02-quality-inspector']) {
     cron.schedule('0 10 * * *', async () => {
       await executeBotSafely('bot-02-quality-inspector', bots['bot-02-quality-inspector']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-02 @ 10:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-02 @ 10:00 AM UTC (3 AM Phoenix)');
   }
   
-  // Bot 3: Negotiation Success Tracker - Daily 12 PM
+  // Bot 3: Negotiation Success Tracker - Daily 12 PM UTC
   if (bots['bot-03-negotiation-tracker']) {
     cron.schedule('0 12 * * *', async () => {
       await executeBotSafely('bot-03-negotiation-tracker', bots['bot-03-negotiation-tracker']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-03 @ 12:00 PM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-03 @ 12:00 PM UTC (5 AM Phoenix)');
   }
   
-  // Bot 4: New User Onboarding Checker - Daily 3 AM
+  // Bot 4: New User Onboarding Checker - Daily 3 AM UTC
   if (bots['bot-04-onboarding-checker']) {
     cron.schedule('0 3 * * *', async () => {
       await executeBotSafely('bot-04-onboarding-checker', bots['bot-04-onboarding-checker']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-04 @ 3:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-04 @ 3:00 AM UTC (8 PM Phoenix previous day)');
   }
   
   // Bot 5: Bill Upload Pipeline Monitor - Every 2 hours
@@ -92,28 +113,28 @@ function scheduleBots() {
     console.log('[manager-bot] [SCHEDULE] bot-05 @ every 2 hours');
   }
   
-  // Bot 6: Webhook Health Checker - Daily 3 PM
+  // Bot 6: Webhook Health Checker - Daily 3 PM UTC
   if (bots['bot-06-webhook-checker']) {
     cron.schedule('0 15 * * *', async () => {
       await executeBotSafely('bot-06-webhook-checker', bots['bot-06-webhook-checker']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-06 @ 3:00 PM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-06 @ 3:00 PM UTC (8 AM Phoenix)');
   }
   
-  // Bot 7: Daily Revenue Report - Daily 11 PM
+  // Bot 7: Daily Revenue Report - Daily 11 PM UTC
   if (bots['bot-07-daily-revenue']) {
     cron.schedule('0 23 * * *', async () => {
       await executeBotSafely('bot-07-daily-revenue', bots['bot-07-daily-revenue']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-07 @ 11:00 PM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-07 @ 11:00 PM UTC (4 PM Phoenix)');
   }
   
-  // Bot 8: User Engagement Tracker - Daily 11:30 PM
+  // Bot 8: User Engagement Tracker - Daily 11:30 PM UTC
   if (bots['bot-08-engagement-tracker']) {
     cron.schedule('30 23 * * *', async () => {
       await executeBotSafely('bot-08-engagement-tracker', bots['bot-08-engagement-tracker']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-08 @ 11:30 PM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-08 @ 11:30 PM UTC (4:30 PM Phoenix)');
   }
   
   // Bot 9: Error Log Analyzer - Every 4 hours
@@ -124,12 +145,12 @@ function scheduleBots() {
     console.log('[manager-bot] [SCHEDULE] bot-09 @ every 4 hours');
   }
   
-  // Bot 10: Database Health Monitor - Daily 1 AM
+  // Bot 10: Database Health Monitor - Daily 1 AM UTC
   if (bots['bot-10-db-health']) {
     cron.schedule('0 1 * * *', async () => {
       await executeBotSafely('bot-10-db-health', bots['bot-10-db-health']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-10 @ 1:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-10 @ 1:00 AM UTC (6 PM Phoenix previous day)');
   }
   
   // Bot 11: API Response Time Monitor - Every 6 hours
@@ -140,71 +161,75 @@ function scheduleBots() {
     console.log('[manager-bot] [SCHEDULE] bot-11 @ every 6 hours');
   }
   
-  // Bot 12: CFO Bot - Weekly on Monday 6 AM
+  // Bot 12: CFO Bot - Weekly on Monday 6 AM UTC
   if (bots['bot-12-cfo']) {
     cron.schedule('0 6 * * 1', async () => {
       await executeBotSafely('bot-12-cfo', bots['bot-12-cfo']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-12 @ Monday 6:00 AM');
+    console.log('[manager-bot] [SCHEDULE] bot-12 @ Monday 6:00 AM UTC (11 PM Phoenix)');
   }
   
-  // Bot 13: Competitor Price Monitor - Weekly on Friday 5 PM
+  // Bot 13: Competitor Price Monitor - Weekly on Friday 5 PM UTC
   if (bots['bot-13-price-monitor']) {
     cron.schedule('0 17 * * 5', async () => {
       await executeBotSafely('bot-13-price-monitor', bots['bot-13-price-monitor']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-13 @ Friday 5:00 PM');
+    console.log('[manager-bot] [SCHEDULE] bot-13 @ Friday 5:00 PM UTC (10 AM Phoenix)');
   }
   
-  // Bot 14: Customer Success Bot - Daily 7 PM
+  // Bot 14: Customer Success Bot - Daily 7 PM UTC
   if (bots['bot-14-success-notifier']) {
     cron.schedule('0 19 * * *', async () => {
       await executeBotSafely('bot-14-success-notifier', bots['bot-14-success-notifier']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-14 @ 7:00 PM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-14 @ 7:00 PM UTC (12 PM Phoenix)');
   }
   
-  // Bot 15: Bland.ai Balance Monitor - Daily 7 AM
+  // Bot 15: Bland.ai Balance Monitor - Daily 7 AM UTC
   if (bots['bot-15-bland-balance']) {
     cron.schedule('0 7 * * *', async () => {
       await executeBotSafely('bot-15-bland-balance', bots['bot-15-bland-balance']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-15 @ 7:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-15 @ 7:00 AM UTC (12 AM Phoenix)');
   }
   
-  // Bot 16: Failed Auth Detector - Daily 9 AM
+  // Bot 16: Failed Auth Detector - Daily 9 AM UTC
   if (bots['bot-16-auth-detector']) {
     cron.schedule('0 9 * * *', async () => {
       await executeBotSafely('bot-16-auth-detector', bots['bot-16-auth-detector']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-16 @ 9:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-16 @ 9:00 AM UTC (2 AM Phoenix)');
   }
   
-  // Bot 17: Stale Bill Cleaner - Weekly on Sunday 2 AM
+  // Bot 17: Stale Bill Cleaner - Weekly on Sunday 2 AM UTC
   if (bots['bot-17-stale-cleaner']) {
     cron.schedule('0 2 * * 0', async () => {
       await executeBotSafely('bot-17-stale-cleaner', bots['bot-17-stale-cleaner']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-17 @ Sunday 2:00 AM');
+    console.log('[manager-bot] [SCHEDULE] bot-17 @ Sunday 2:00 AM UTC (7 PM Saturday Phoenix)');
   }
   
-  // Bot 18: Cost Optimization Analyst - Weekly on Wednesday 4 PM
+  // Bot 18: Cost Optimization Analyst - Weekly on Wednesday 4 PM UTC
   if (bots['bot-18-cost-optimizer']) {
     cron.schedule('0 16 * * 3', async () => {
       await executeBotSafely('bot-18-cost-optimizer', bots['bot-18-cost-optimizer']);
     });
-    console.log('[manager-bot] [SCHEDULE] bot-18 @ Wednesday 4:00 PM');
+    console.log('[manager-bot] [SCHEDULE] bot-18 @ Wednesday 4:00 PM UTC (9 AM Phoenix)');
   }
   
-  // Bot 19: Manager Bot - Daily 6 AM
+  // Bot 19: Manager Bot - Daily 13 AM UTC (separate from email)
   if (bots['bot-19-manager']) {
-    cron.schedule('0 6 * * *', async () => {
+    cron.schedule('0 13 * * *', async () => {
       await executeBotSafely('bot-19-manager', bots['bot-19-manager']);
-      // Send daily report email
-      await sendDailyReport();
     });
-    console.log('[manager-bot] [SCHEDULE] bot-19 @ 6:00 AM daily');
+    console.log('[manager-bot] [SCHEDULE] bot-19 @ 1:00 PM UTC (6 AM Phoenix)');
   }
+  
+  // DAILY REPORT EMAIL - 13 AM UTC (6 AM Phoenix) — independent of bot-19
+  cron.schedule('0 13 * * *', async () => {
+    await sendDailyReport();
+  });
+  console.log('[manager-bot] [SCHEDULE] DAILY EMAIL @ 1:00 PM UTC (6 AM Phoenix)');
 }
 
 async function executeBotSafely(botName, botObj) {
@@ -232,7 +257,7 @@ async function executeBotSafely(botName, botObj) {
 
 async function sendDailyReport() {
   if (!transporter) {
-    console.log('[manager-bot] [WARNING] Email not configured, skipping report');
+    console.log('[manager-bot] [WARNING] Email not configured, skipping daily report');
     return;
   }
   
@@ -265,7 +290,7 @@ async function sendDailyReport() {
     };
     
     await transporter.sendMail(mailOptions);
-    console.log('[manager-bot] [EMAIL] Daily report sent to Billaxellc@gmail.com');
+    console.log('[manager-bot] [EMAIL] Daily report sent to billaxellc@gmail.com');
   } catch (err) {
     console.log(`[manager-bot] [EMAIL_ERROR] Failed to send report: ${err.message}`);
   }
@@ -278,7 +303,9 @@ setInterval(() => {
   console.log(`[manager-bot] [HEARTBEAT] Bots: ${Object.keys(bots).length} scheduled | Success: ${successCount} | Failed: ${failCount}`);
 }, 60000);
 
+// Startup
 console.log('[manager-bot] [INFO] BillAxe Bot Manager starting up');
+sendStartupTest();
 scheduleBots();
 console.log('[manager-bot] [INFO] All bot schedules initialized and ready');
 console.log('[manager-bot] [INFO] 19 bots scheduled and monitoring');
