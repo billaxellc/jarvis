@@ -1,6 +1,6 @@
 /**
  * Bot 4: New User Onboarding Checker
- * Runs: Daily 3 AM
+ * Runs: Daily 3 AM UTC (8 PM Phoenix)
  * Simulates full onboarding flow
  * Logs every step, flags failures
  */
@@ -15,64 +15,67 @@ async function run() {
     console.log('[bot-04] [INFO] Starting: Onboarding Checker');
     
     const steps = [];
-    
-    // Step 1: Check auth system
+
+    // Step 1: Check Supabase env vars are set
     try {
-      // Would normally test signup, but we can't without actual credentials
-      steps.push({ step: 'Auth System', status: 'OK', timestamp: new Date().toISOString() });
+      if (!supabaseUrl || !supabaseKey) throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY');
+      steps.push({ step: 'Supabase Config', status: 'OK' });
     } catch (e) {
-      steps.push({ step: 'Auth System', status: 'FAILED', error: e.message });
+      steps.push({ step: 'Supabase Config', status: 'FAILED', error: e.message });
     }
-    
-    // Step 2: Check Supabase connection
+
+    // Step 2: Check Supabase connection with a real DB ping
     try {
-      const { data, error } = await supabase.auth.getSession();
-      if (!error) {
-        steps.push({ step: 'Supabase Connection', status: 'OK' });
-      } else {
-        steps.push({ step: 'Supabase Connection', status: 'FAILED', error: error.message });
-      }
+      const { error } = await supabase.from('uploaded_bills').select('id').limit(1);
+      if (error) throw new Error(error.message);
+      steps.push({ step: 'Supabase Connection', status: 'OK' });
     } catch (e) {
       steps.push({ step: 'Supabase Connection', status: 'FAILED', error: e.message });
     }
-    
+
     // Step 3: Check uploaded_bills table
     try {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('uploaded_bills')
-        .select('count')
+        .select('id')
         .limit(1);
-      
-      if (!error) {
-        steps.push({ step: 'Database Access (uploaded_bills)', status: 'OK' });
-      } else {
-        steps.push({ step: 'Database Access (uploaded_bills)', status: 'FAILED', error: error.message });
-      }
+      if (error) throw new Error(error.message);
+      steps.push({ step: 'Database Access (uploaded_bills)', status: 'OK' });
     } catch (e) {
       steps.push({ step: 'Database Access (uploaded_bills)', status: 'FAILED', error: e.message });
     }
-    
-    // Step 4: Check user_profiles table
+
+    // Step 4: Check user_profiles table (non-fatal — table may not exist yet)
     try {
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('user_profiles')
-        .select('count')
+        .select('id')
         .limit(1);
-      
-      if (!error) {
-        steps.push({ step: 'Database Access (user_profiles)', status: 'OK' });
-      } else {
-        steps.push({ step: 'Database Access (user_profiles)', status: 'FAILED', error: error.message });
-      }
+      if (error) throw new Error(error.message);
+      steps.push({ step: 'Database Access (user_profiles)', status: 'OK' });
     } catch (e) {
-      steps.push({ step: 'Database Access (user_profiles)', status: 'FAILED', error: e.message });
+      // Non-fatal — log it but don't fail the whole bot
+      steps.push({ step: 'Database Access (user_profiles)', status: 'WARN', error: e.message });
+      console.log(`[bot-04] [WARN] user_profiles table issue: ${e.message}`);
     }
-    
+
+    // Step 5: Check BILLAXE_API_URL is set
+    try {
+      const apiUrl = process.env.BILLAXE_API_URL;
+      if (!apiUrl) throw new Error('BILLAXE_API_URL not set');
+      steps.push({ step: 'API URL Config', status: 'OK', value: apiUrl });
+    } catch (e) {
+      steps.push({ step: 'API URL Config', status: 'FAILED', error: e.message });
+    }
+
     const failedSteps = steps.filter(s => s.status === 'FAILED').length;
-    const statusMsg = failedSteps === 0 ? 'All systems operational' : `${failedSteps} step(s) failed`;
-    
+    const warnSteps = steps.filter(s => s.status === 'WARN').length;
+    const statusMsg = failedSteps === 0
+      ? `All systems operational (${warnSteps} warnings)`
+      : `${failedSteps} step(s) failed, ${warnSteps} warnings`;
+
     console.log(`[bot-04] [SUCCESS] Onboarding simulation complete - ${statusMsg}`);
-    return { success: failedSteps === 0, total_steps: steps.length, failed: failedSteps, steps };
+    return { success: failedSteps === 0, total_steps: steps.length, failed: failedSteps, warnings: warnSteps, steps };
   } catch (err) {
     console.log(`[bot-04] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
