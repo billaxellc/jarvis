@@ -1,6 +1,6 @@
 /**
  * Bot 10: Database Health Monitor
- * Runs: Daily 1 AM
+ * Runs: Daily 1 AM UTC (6 PM Phoenix)
  * Checks Supabase connection, query performance, table sizes
  * Alerts on abnormal growth
  */
@@ -19,7 +19,7 @@ async function run() {
       tables: {}
     };
     
-    // Check uploaded_bills table
+    // Check uploaded_bills table — CRITICAL
     try {
       const start = Date.now();
       const { count, error } = await supabase
@@ -36,12 +36,14 @@ async function run() {
         };
       } else {
         health.tables.uploaded_bills = { status: 'ERROR', error: error.message };
+        health.connection_status = 'DEGRADED';
       }
     } catch (e) {
       health.tables.uploaded_bills = { status: 'ERROR', error: e.message };
+      health.connection_status = 'DEGRADED';
     }
     
-    // Check user_profiles table
+    // Check user_profiles table — NON-CRITICAL (may not exist)
     try {
       const start = Date.now();
       const { count, error } = await supabase
@@ -57,17 +59,16 @@ async function run() {
           status: queryTime < 500 ? 'OK' : 'SLOW'
         };
       } else {
-        health.tables.user_profiles = { status: 'ERROR', error: error.message };
+        health.tables.user_profiles = { status: 'WARN', error: error.message };
+        console.log(`[bot-10] [WARN] user_profiles: ${error.message}`);
       }
     } catch (e) {
-      health.tables.user_profiles = { status: 'ERROR', error: e.message };
+      health.tables.user_profiles = { status: 'WARN', error: e.message };
+      console.log(`[bot-10] [WARN] user_profiles: ${e.message}`);
     }
     
-    const hasErrors = Object.values(health.tables).some(t => t.status === 'ERROR');
-    health.connection_status = hasErrors ? 'DEGRADED' : 'OK';
-    
     console.log(`[bot-10] [SUCCESS] Database health: ${health.connection_status}`);
-    return { success: !hasErrors, ...health };
+    return { success: health.connection_status === 'OK', ...health };
   } catch (err) {
     console.log(`[bot-10] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
