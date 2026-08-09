@@ -1,6 +1,6 @@
 /**
  * Bot 17: Stale Bill Cleaner
- * Runs: Weekly
+ * Runs: Weekly Sunday 2 AM UTC (7 PM Saturday Phoenix)
  * Finds bills in pending status 7+ days with no activity
  * Flags for review
  */
@@ -20,7 +20,7 @@ async function run() {
       .from('uploaded_bills')
       .select('*')
       .in('status', ['pending', 'pending_negotiation', 'call_in_progress'])
-      .lt('updated_at', sevenDaysAgo);
+      .lt('created_at', sevenDaysAgo);
     
     if (error) {
       console.log(`[bot-17] [ERROR] Query failed: ${error.message}`);
@@ -35,7 +35,7 @@ async function run() {
     
     // Flag each stale bill
     for (const bill of staleBills || []) {
-      const daysOld = Math.floor((Date.now() - new Date(bill.updated_at).getTime()) / (24 * 60 * 60 * 1000));
+      const daysOld = Math.floor((Date.now() - new Date(bill.created_at).getTime()) / (24 * 60 * 60 * 1000));
       staleReport.bills_requiring_attention.push({
         id: bill.id,
         provider: bill.provider_name,
