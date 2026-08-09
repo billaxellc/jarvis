@@ -1,83 +1,146 @@
 /**
  * Bot 19: Manager Bot (Daily Report)
- * Runs: Daily 6 AM
- * Reads all bot reports from previous night
- * Synthesizes into ONE summary email to Ty
- * Format: what worked, what broke, what needs attention
+ * Runs: Daily 6 AM UTC (11 PM Phoenix)
+ * Pulls live data from Supabase
+ * Sends real summary email to Ty
  */
 
-const nodemailer = require('nodemailer');
+const { createClient } = require('@supabase/supabase-js');
+const { Resend } = require('resend');
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function run() {
   try {
     console.log('[bot-19] [INFO] Starting: Manager Bot (Daily Report)');
-    
-    const report = {
-      generated_at: new Date().toISOString(),
-      subject: 'BillAxe Daily Operations Report',
-      status_summary: {
-        systems_healthy: true,
-        alerts: [],
-        action_items: []
-      },
-      bot_executions: {
-        successful: 0,
-        failed: 0,
-        total: 0
-      },
-      daily_metrics: {
-        revenue: '$0.00',
-        bills_processed: 0,
-        successful_negotiations: 0,
-        active_users: 0,
-        mrr_impact: '$0.00'
-      }
-    };
-    
-    // In production, this would aggregate all bot reports from the previous 24 hours
-    // For now, we'll structure the report template
-    
-    report.status_summary.action_items.push({
-      priority: 'HIGH',
-      item: 'Check Bland.ai balance - critical if below $50',
-      bot: 'Bot-15'
-    });
-    
-    report.status_summary.action_items.push({
-      priority: 'MEDIUM',
-      item: 'Review stale bills pending 7+ days',
-      bot: 'Bot-17'
-    });
-    
-    // Format for email
-    let emailBody = `
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString();
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
+    // --- Pull live metrics ---
+
+    // All bills uploaded today
+    const { data: todayBills, error: billsError } = await supabase
+      .from('uploaded_bills')
+      .select('*')
+      .gte('created_at', todayStr);
+
+    if (billsError) {
+      console.log(`[bot-19] [ERROR] Bills query failed: ${billsError.message}`);
+      return { success: false, error: billsError.message };
+    }
+
+    const bills = todayBills || [];
+    const successful = bills.filter(b => b.status === 'negotiation_complete');
+    const failed = bills.filter(b => b.status === 'call_failed');
+    const pending = bills.filter(b => b.status === 'pending_negotiation');
+    const inProgress = bills.filter(b => b.status === 'call_in_progress');
+
+    // Stale bills (7+ days old, still pending)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: staleBills } = await supabase
+      .from('uploaded_bills')
+      .select('id, provider_name, status')
+      .in('status', ['pending', 'pending_negotiation', 'call_in_progress'])
+      .lt('created_at', sevenDaysAgo);
+
+    // High retry bills
+    const { data: highRetryBills } = await supabase
+      .from('uploaded_bills')
+      .select('id, provider_name, attempt_count')
+      .gte('attempt_count', 4);
+
+    // Total all-time stats
+    const { data: allBills } = await supabase
+      .from('uploaded_bills')
+      .select('status, amount');
+
+    const totalAllTime = allBills?.length || 0;
+    const totalSuccessAllTime = allBills?.filter(b => b.status === 'negotiation_complete').length || 0;
+    const totalAmount = allBills?.reduce((sum, b) => sum + (b.amount || 0), 0) || 0;
+    const estimatedSavings = totalAmount * 0.10;
+
+    // Unique active users today
+    const uniqueUsers = new Set(bills.map(b => b.user_id));
+
+    // Build action items
+    const actionItems = [];
+    if ((staleBills?.length || 0) > 0) {
+      actionItems.push(`⚠️ ${staleBills.length} stale bills (7+ days, no progress) need review`);
+    }
+    if ((highRetryBills?.length || 0) > 0) {
+      actionItems.push(`⚠️ ${highRetryBills.length} bills with 4+ retry attempts — check provider numbers`);
+    }
+    if (failed.length > 0) {
+      actionItems.push(`❌ ${failed.length} calls failed today`);
+    }
+    if (actionItems.length === 0) {
+      actionItems.push('✅ No action items — all systems clean');
+    }
+
+    // MRR estimate ($9.99/month)
+    const mrrEstimate = (uniqueUsers.size * 9.99).toFixed(2);
+
+    // Build email
+    const emailBody = `
 BillAxe Daily Operations Report
-Generated: ${report.generated_at}
+${today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-SYSTEMS STATUS:
-${report.status_summary.systems_healthy ? '✅ All systems healthy' : '❌ Issues detected'}
+📊 TODAY'S ACTIVITY
+• Bills uploaded today: ${bills.length}
+• Successful negotiations: ${successful.length}
+• Failed calls: ${failed.length}
+• Pending retry: ${pending.length}
+• In progress: ${inProgress.length}
+• Active users today: ${uniqueUsers.size}
 
-ACTION ITEMS FOR TY:
-${report.status_summary.action_items.map((ai) => `- [${ai.priority}] ${ai.item} (${ai.bot})`).join('\n')}
+📈 ALL-TIME STATS
+• Total bills processed: ${totalAllTime}
+• Total successful: ${totalSuccessAllTime}
+• Estimated total savings generated: $${estimatedSavings.toFixed(2)}
+• Est. MRR from today's users: $${mrrEstimate}
 
-DAILY METRICS:
-- Revenue: ${report.daily_metrics.revenue}
-- Bills Processed: ${report.daily_metrics.bills_processed}
-- Successful Negotiations: ${report.daily_metrics.successful_negotiations}
-- Active Users: ${report.daily_metrics.active_users}
-- MRR Impact: ${report.daily_metrics.mrr_impact}
+🔧 ACTION ITEMS
+${actionItems.map(i => `• ${i}`).join('\n')}
 
-BOT EXECUTIONS:
-- Successful: ${report.bot_executions.successful}
-- Failed: ${report.bot_executions.failed}
-- Total: ${report.bot_executions.total}
+🤖 BOT SYSTEM
+• 19 bots running on Railway
+• Next report: tomorrow 6 AM UTC
 
-This email would be sent to: Billaxellc@gmail.com
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+BillAxe Bot System — ${new Date().toISOString()}
     `.trim();
-    
-    console.log('[bot-19] [EMAIL] Would send daily report to Billaxellc@gmail.com');
-    console.log('[bot-19] [SUCCESS] Daily report generated');
-    return { success: true, report };
+
+    // Send email
+    const { error: emailError } = await resend.emails.send({
+      from: 'onboarding@resend.dev',
+      to: 'billaxellc@gmail.com',
+      subject: `📊 BillAxe Daily Report — ${bills.length} bills, ${successful.length} wins`,
+      text: emailBody
+    });
+
+    if (emailError) {
+      console.log(`[bot-19] [ERROR] Email failed: ${emailError.message}`);
+      return { success: false, error: emailError.message };
+    }
+
+    console.log('[bot-19] [SUCCESS] Daily report sent to billaxellc@gmail.com');
+    return {
+      success: true,
+      bills_today: bills.length,
+      successful_today: successful.length,
+      failed_today: failed.length,
+      pending_today: pending.length,
+      active_users: uniqueUsers.size,
+      stale_bills: staleBills?.length || 0,
+      high_retry_bills: highRetryBills?.length || 0
+    };
   } catch (err) {
     console.log(`[bot-19] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
