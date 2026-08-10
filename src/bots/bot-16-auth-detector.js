@@ -6,9 +6,16 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
+
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 async function run() {
   try {
@@ -24,7 +31,7 @@ async function run() {
       recent_signups: 0
     };
 
-    // Test 1: Verify admin API is reachable (real auth health check)
+    // Test 1: Verify admin API is reachable
     try {
       const { data, error } = await supabase.auth.admin.listUsers({ perPage: 1 });
       if (error) throw new Error(error.message);
@@ -49,15 +56,13 @@ async function run() {
       console.log(`[bot-16] [WARN] Could not check recent signups: ${e.message}`);
     }
 
-    // Test 3: Check for users with no uploaded bills (may be stuck post-signup)
+    // Test 3: Check for users with no uploaded bills via Neon
     try {
-      const { data: bills, error: billsError } = await supabase
-        .from('uploaded_bills')
-        .select('user_id');
+      const { rows: bills } = await neonPool.query(
+        `SELECT DISTINCT user_id FROM public.uploaded_bills`
+      );
 
-      if (billsError) throw new Error(billsError.message);
-
-      const usersWithBills = new Set((bills || []).map(b => b.user_id));
+      const usersWithBills = new Set(bills.map(b => b.user_id));
       const { data: allUsers } = await supabase.auth.admin.listUsers();
       const totalUsers = allUsers?.users?.length || 0;
       authMonitor.users_with_no_bills = Math.max(0, totalUsers - usersWithBills.size);
@@ -68,6 +73,7 @@ async function run() {
 
     console.log(`[bot-16] [SUCCESS] Auth status: ${authMonitor.connection_status} — ${authMonitor.total_users} users, ${authMonitor.recent_signups} new today, ${authMonitor.users_with_no_bills} with no bills`);
     return { success: authMonitor.auth_healthy, ...authMonitor };
+
   } catch (err) {
     console.log(`[bot-16] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
