@@ -6,11 +6,17 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
 const axios = require('axios');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 const BILLAXE_API = process.env.BILLAXE_API_URL || 'https://billaxe.app';
 const BILLAXE_BOT_SECRET = process.env.BILLAXE_BOT_SECRET;
@@ -19,16 +25,14 @@ async function run() {
   try {
     console.log('[bot-01] [INFO] Starting: Bill Retry Supervisor');
 
-    const { data: bills, error } = await supabase
-      .from('uploaded_bills')
-      .select('*')
-      .eq('status', 'pending_negotiation')
-      .lte('retry_after', new Date().toISOString());
-
-    if (error) {
-      console.log(`[bot-01] [ERROR] Query failed: ${error.message}`);
-      return { success: false, error: error.message };
-    }
+    const now = new Date().toISOString();
+    const { rows: bills } = await neonPool.query(
+      `SELECT * FROM public.uploaded_bills
+       WHERE status = 'pending_negotiation'
+       AND retry_after IS NOT NULL
+       AND retry_after <= $1`,
+      [now]
+    );
 
     if (!bills || bills.length === 0) {
       console.log('[bot-01] [SUCCESS] No bills due for retry');
@@ -42,10 +46,10 @@ async function run() {
       const newAttemptCount = (bill.attempt_count || 0) + 1;
 
       if (newAttemptCount > 5) {
-        await supabase
-          .from('uploaded_bills')
-          .update({ status: 'call_failed', attempt_count: newAttemptCount })
-          .eq('id', bill.id);
+        await neonPool.query(
+          `UPDATE public.uploaded_bills SET status = 'call_failed', attempt_count = $1 WHERE id = $2`,
+          [newAttemptCount, bill.id]
+        );
         console.log(`[bot-01] [MAXED] Bill ${bill.id} hit max attempts — marked call_failed`);
         continue;
       }
@@ -64,11 +68,10 @@ async function run() {
         );
 
         if (response.data?.ok) {
-          await supabase
-            .from('uploaded_bills')
-            .update({ attempt_count: newAttemptCount })
-            .eq('id', bill.id);
-
+          await neonPool.query(
+            `UPDATE public.uploaded_bills SET attempt_count = $1 WHERE id = $2`,
+            [newAttemptCount, bill.id]
+          );
           console.log(`[bot-01] [RETRIGGER] Bill ${bill.id} (${bill.provider_name}) fired — attempt ${newAttemptCount}`);
           retriggered++;
         } else {
