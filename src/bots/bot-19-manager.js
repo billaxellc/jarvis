@@ -1,17 +1,19 @@
 /**
  * Bot 19: Manager Bot (Daily Report)
  * Runs: Daily 6 AM UTC (11 PM Phoenix)
- * Pulls live data from Supabase
+ * Pulls live data from Neon
  * Sends real summary email to Ty
  */
 
-const { createClient } = require('@supabase/supabase-js');
 const { Resend } = require('resend');
+const { Pool } = require('pg');
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 async function run() {
   try {
@@ -20,73 +22,52 @@ async function run() {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const todayStr = today.toISOString();
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // --- Pull live metrics ---
+    // Bills uploaded today
+    const { rows: bills } = await neonPool.query(
+      `SELECT * FROM public.uploaded_bills WHERE created_at >= $1`,
+      [todayStr]
+    );
 
-    // All bills uploaded today
-    const { data: todayBills, error: billsError } = await supabase
-      .from('uploaded_bills')
-      .select('*')
-      .gte('created_at', todayStr);
-
-    if (billsError) {
-      console.log(`[bot-19] [ERROR] Bills query failed: ${billsError.message}`);
-      return { success: false, error: billsError.message };
-    }
-
-    const bills = todayBills || [];
     const successful = bills.filter(b => b.status === 'negotiation_complete');
-    const failed = bills.filter(b => b.status === 'call_failed');
-    const pending = bills.filter(b => b.status === 'pending_negotiation');
+    const failed     = bills.filter(b => b.status === 'call_failed');
+    const pending    = bills.filter(b => b.status === 'pending_negotiation');
     const inProgress = bills.filter(b => b.status === 'call_in_progress');
 
-    // Stale bills (7+ days old, still pending)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const { data: staleBills } = await supabase
-      .from('uploaded_bills')
-      .select('id, provider_name, status')
-      .in('status', ['pending', 'pending_negotiation', 'call_in_progress'])
-      .lt('created_at', sevenDaysAgo);
+    // Stale bills
+    const { rows: staleBills } = await neonPool.query(
+      `SELECT id, provider_name, status FROM public.uploaded_bills
+       WHERE status IN ('pending', 'pending_negotiation', 'call_in_progress')
+       AND created_at < $1`,
+      [sevenDaysAgo]
+    );
 
     // High retry bills
-    const { data: highRetryBills } = await supabase
-      .from('uploaded_bills')
-      .select('id, provider_name, attempt_count')
-      .gte('attempt_count', 4);
+    const { rows: highRetryBills } = await neonPool.query(
+      `SELECT id, provider_name, attempt_count FROM public.uploaded_bills
+       WHERE attempt_count >= 4`
+    );
 
-    // Total all-time stats
-    const { data: allBills } = await supabase
-      .from('uploaded_bills')
-      .select('status, amount');
+    // All-time stats
+    const { rows: allBills } = await neonPool.query(
+      `SELECT status, amount FROM public.uploaded_bills`
+    );
 
-    const totalAllTime = allBills?.length || 0;
-    const totalSuccessAllTime = allBills?.filter(b => b.status === 'negotiation_complete').length || 0;
-    const totalAmount = allBills?.reduce((sum, b) => sum + (b.amount || 0), 0) || 0;
+    const totalAllTime = allBills.length;
+    const totalSuccessAllTime = allBills.filter(b => b.status === 'negotiation_complete').length;
+    const totalAmount = allBills.reduce((sum, b) => sum + (parseFloat(b.amount) || 0), 0);
     const estimatedSavings = totalAmount * 0.10;
 
-    // Unique active users today
     const uniqueUsers = new Set(bills.map(b => b.user_id));
-
-    // Build action items
-    const actionItems = [];
-    if ((staleBills?.length || 0) > 0) {
-      actionItems.push(`⚠️ ${staleBills.length} stale bills (7+ days, no progress) need review`);
-    }
-    if ((highRetryBills?.length || 0) > 0) {
-      actionItems.push(`⚠️ ${highRetryBills.length} bills with 4+ retry attempts — check provider numbers`);
-    }
-    if (failed.length > 0) {
-      actionItems.push(`❌ ${failed.length} calls failed today`);
-    }
-    if (actionItems.length === 0) {
-      actionItems.push('✅ No action items — all systems clean');
-    }
-
-    // MRR estimate ($9.99/month)
     const mrrEstimate = (uniqueUsers.size * 9.99).toFixed(2);
 
-    // Build email
+    const actionItems = [];
+    if (staleBills.length > 0)     actionItems.push(`⚠️ ${staleBills.length} stale bills (7+ days, no progress) need review`);
+    if (highRetryBills.length > 0) actionItems.push(`⚠️ ${highRetryBills.length} bills with 4+ retry attempts — check provider numbers`);
+    if (failed.length > 0)         actionItems.push(`❌ ${failed.length} calls failed today`);
+    if (actionItems.length === 0)  actionItems.push('✅ No action items — all systems clean');
+
     const emailBody = `
 BillAxe Daily Operations Report
 ${today.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
@@ -117,7 +98,6 @@ ${actionItems.map(i => `• ${i}`).join('\n')}
 BillAxe Bot System — ${new Date().toISOString()}
     `.trim();
 
-    // Send email
     const { error: emailError } = await resend.emails.send({
       from: 'onboarding@resend.dev',
       to: 'billaxellc@gmail.com',
@@ -138,9 +118,10 @@ BillAxe Bot System — ${new Date().toISOString()}
       failed_today: failed.length,
       pending_today: pending.length,
       active_users: uniqueUsers.size,
-      stale_bills: staleBills?.length || 0,
-      high_retry_bills: highRetryBills?.length || 0
+      stale_bills: staleBills.length,
+      high_retry_bills: highRetryBills.length
     };
+
   } catch (err) {
     console.log(`[bot-19] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
