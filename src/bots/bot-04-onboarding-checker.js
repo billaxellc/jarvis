@@ -6,17 +6,24 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
+
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
 async function run() {
   try {
     console.log('[bot-04] [INFO] Starting: Onboarding Checker');
-    
+
     const steps = [];
 
-    // Step 1: Check Supabase env vars are set
+    // Step 1: Check env vars are set
     try {
       if (!supabaseUrl || !supabaseKey) throw new Error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY');
       steps.push({ step: 'Supabase Config', status: 'OK' });
@@ -24,37 +31,28 @@ async function run() {
       steps.push({ step: 'Supabase Config', status: 'FAILED', error: e.message });
     }
 
-    // Step 2: Check Supabase connection with a real DB ping
+    // Step 2: Check Neon connection with a real DB ping
     try {
-      const { error } = await supabase.from('uploaded_bills').select('id').limit(1);
-      if (error) throw new Error(error.message);
-      steps.push({ step: 'Supabase Connection', status: 'OK' });
+      await neonPool.query('SELECT 1');
+      steps.push({ step: 'Neon Connection', status: 'OK' });
     } catch (e) {
-      steps.push({ step: 'Supabase Connection', status: 'FAILED', error: e.message });
+      steps.push({ step: 'Neon Connection', status: 'FAILED', error: e.message });
     }
 
-    // Step 3: Check uploaded_bills table
+    // Step 3: Check uploaded_bills table via Neon
     try {
-      const { error } = await supabase
-        .from('uploaded_bills')
-        .select('id')
-        .limit(1);
-      if (error) throw new Error(error.message);
+      await neonPool.query('SELECT id FROM public.uploaded_bills LIMIT 1');
       steps.push({ step: 'Database Access (uploaded_bills)', status: 'OK' });
     } catch (e) {
       steps.push({ step: 'Database Access (uploaded_bills)', status: 'FAILED', error: e.message });
     }
 
-    // Step 4: Check user_profiles table (non-fatal — table may not exist yet)
+    // Step 4: Check user_profiles table via Supabase (non-fatal)
     try {
-      const { error } = await supabase
-        .from('user_profiles')
-        .select('id')
-        .limit(1);
+      const { error } = await supabase.from('user_profiles').select('id').limit(1);
       if (error) throw new Error(error.message);
       steps.push({ step: 'Database Access (user_profiles)', status: 'OK' });
     } catch (e) {
-      // Non-fatal — log it but don't fail the whole bot
       steps.push({ step: 'Database Access (user_profiles)', status: 'WARN', error: e.message });
       console.log(`[bot-04] [WARN] user_profiles table issue: ${e.message}`);
     }
@@ -76,6 +74,7 @@ async function run() {
 
     console.log(`[bot-04] [SUCCESS] Onboarding simulation complete - ${statusMsg}`);
     return { success: failedSteps === 0, total_steps: steps.length, failed: failedSteps, warnings: warnSteps, steps };
+
   } catch (err) {
     console.log(`[bot-04] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
