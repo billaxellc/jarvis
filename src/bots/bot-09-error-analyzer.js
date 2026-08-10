@@ -4,10 +4,12 @@
  * Checks for bills in bad states, high retry counts, and system anomalies
  */
 
-const { createClient } = require('@supabase/supabase-js');
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const { Pool } = require('pg');
+
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 async function run() {
   try {
@@ -22,17 +24,12 @@ async function run() {
     };
 
     // Check for bills stuck in call_failed
-    const { data: failedBills, error: failedError } = await supabase
-      .from('uploaded_bills')
-      .select('id, provider_name, attempt_count, status')
-      .eq('status', 'call_failed');
+    const { rows: failedBills } = await neonPool.query(
+      `SELECT id, provider_name, attempt_count, status
+       FROM public.uploaded_bills WHERE status = 'call_failed'`
+    );
 
-    if (failedError) {
-      console.log(`[bot-09] [ERROR] Failed bills query failed: ${failedError.message}`);
-      return { success: false, error: failedError.message };
-    }
-
-    if (failedBills?.length > 0) {
+    if (failedBills.length > 0) {
       analysis.errors_found += failedBills.length;
       analysis.critical_errors += failedBills.length;
       for (const bill of failedBills) {
@@ -45,33 +42,31 @@ async function run() {
       }
     }
 
-    // Check for bills with suspiciously high attempt counts
-    const { data: highRetry, error: retryError } = await supabase
-      .from('uploaded_bills')
-      .select('id, provider_name, attempt_count, status')
-      .gte('attempt_count', 4);
+    // Check for bills with high attempt counts
+    const { rows: highRetry } = await neonPool.query(
+      `SELECT id, provider_name, attempt_count, status
+       FROM public.uploaded_bills WHERE attempt_count >= 4`
+    );
 
-    if (!retryError && highRetry?.length > 0) {
-      for (const bill of highRetry) {
-        analysis.warnings++;
-        analysis.errors.push({
-          type: 'HIGH_RETRY_COUNT',
-          bill_id: bill.id,
-          provider: bill.provider_name,
-          attempts: bill.attempt_count,
-          status: bill.status
-        });
-      }
+    for (const bill of highRetry) {
+      analysis.warnings++;
+      analysis.errors.push({
+        type: 'HIGH_RETRY_COUNT',
+        bill_id: bill.id,
+        provider: bill.provider_name,
+        attempts: bill.attempt_count,
+        status: bill.status
+      });
     }
 
-    // Check for bills stuck in pending_negotiation with no retry_after set
-    const { data: stuckBills, error: stuckError } = await supabase
-      .from('uploaded_bills')
-      .select('id, provider_name, status, retry_after')
-      .eq('status', 'pending_negotiation')
-      .is('retry_after', null);
+    // Check for bills stuck in pending_negotiation with no retry_after
+    const { rows: stuckBills } = await neonPool.query(
+      `SELECT id, provider_name, status, retry_after
+       FROM public.uploaded_bills
+       WHERE status = 'pending_negotiation' AND retry_after IS NULL`
+    );
 
-    if (!stuckError && stuckBills?.length > 0) {
+    if (stuckBills.length > 0) {
       analysis.errors_found += stuckBills.length;
       analysis.warnings += stuckBills.length;
       for (const bill of stuckBills) {
@@ -85,6 +80,7 @@ async function run() {
 
     console.log(`[bot-09] [SUCCESS] Analysis complete — ${analysis.critical_errors} critical, ${analysis.warnings} warnings`);
     return { success: true, ...analysis };
+
   } catch (err) {
     console.log(`[bot-09] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
