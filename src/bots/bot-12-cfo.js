@@ -1,14 +1,21 @@
 /**
  * Bot 12: CFO Bot
  * Runs: Weekly Monday 6 AM UTC (11 PM Phoenix)
- * Calculates weekly P&L from Supabase data
+ * Calculates weekly P&L from Neon + Supabase data
  * Revenue vs operating costs, net profit, margin
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
+
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
+
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 
 async function run() {
   try {
@@ -16,7 +23,7 @@ async function run() {
 
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    // Get new users this week — non-fatal if user_profiles doesn't exist
+    // New users this week via Supabase — non-fatal
     let activeSubscribers = 0;
     try {
       const { data: users, error } = await supabase
@@ -29,16 +36,11 @@ async function run() {
       console.log(`[bot-12] [WARN] user_profiles unavailable: ${e.message}`);
     }
 
-    // Get bills processed this week
-    const { data: bills, error: billsError } = await supabase
-      .from('uploaded_bills')
-      .select('id, attempt_count')
-      .gte('created_at', weekAgo);
-
-    if (billsError) {
-      console.log(`[bot-12] [ERROR] Bills query failed: ${billsError.message}`);
-      return { success: false, error: billsError.message };
-    }
+    // Bills processed this week via Neon
+    const { rows: bills } = await neonPool.query(
+      `SELECT id, attempt_count FROM public.uploaded_bills WHERE created_at >= $1`,
+      [weekAgo]
+    );
 
     // Revenue calculations
     const weeklySubRevenue = (activeSubscribers * 9.99) / 4.29;
@@ -47,7 +49,7 @@ async function run() {
     const totalRevenue = weeklySubRevenue + affiliateRevenue + payPerUseRevenue;
 
     // Cost calculations
-    const totalCallAttempts = (bills || []).reduce((sum, b) => sum + (b.attempt_count || 1), 0);
+    const totalCallAttempts = bills.reduce((sum, b) => sum + (b.attempt_count || 1), 0);
     const blandCost = totalCallAttempts * 0.50;
     const supabaseCost = 50;
     const replitCost = 7;
@@ -76,12 +78,13 @@ async function run() {
       net_profit: +netProfit.toFixed(2),
       margin_pct: marginPct,
       active_subscribers: activeSubscribers,
-      bills_processed: bills?.length || 0,
+      bills_processed: bills.length,
       total_call_attempts: totalCallAttempts
     };
 
     console.log(`[bot-12] [SUCCESS] Weekly P&L — Revenue: $${financials.revenue.total}, Profit: $${financials.net_profit}, Margin: ${financials.margin_pct}%`);
     return { success: true, ...financials };
+
   } catch (err) {
     console.log(`[bot-12] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
