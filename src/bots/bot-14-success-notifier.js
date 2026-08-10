@@ -6,6 +6,7 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { Pool } = require('pg');
 const { Resend } = require('resend');
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -13,30 +14,31 @@ const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+const neonPool = new Pool({
+  connectionString: process.env.NEON_DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
 async function run() {
   try {
     console.log('[bot-14] [INFO] Starting: Customer Success Bot');
 
-    // Get today's completed negotiations
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const { data: completed, error } = await supabase
-      .from('uploaded_bills')
-      .select('*')
-      .eq('status', 'negotiation_complete')
-      .gte('created_at', today.toISOString());
-
-    if (error) {
-      console.log(`[bot-14] [ERROR] Query failed: ${error.message}`);
-      return { success: false, error: error.message };
-    }
+    // Get today's completed negotiations from Neon
+    const { rows: completed } = await neonPool.query(
+      `SELECT * FROM public.uploaded_bills
+       WHERE status = 'negotiation_complete'
+       AND created_at >= $1`,
+      [today.toISOString()]
+    );
 
     let emailsSent = 0;
     let emailsFailed = 0;
 
-    for (const bill of completed || []) {
-      const estimatedSavings = (bill.amount || 0) * 0.10;
+    for (const bill of completed) {
+      const estimatedSavings = (parseFloat(bill.amount) || 0) * 0.10;
 
       // Get user email from Supabase auth
       let userEmail = null;
@@ -63,7 +65,7 @@ async function run() {
             ``,
             `Maya successfully negotiated your ${bill.provider_name} bill!`,
             ``,
-            `Original amount: $${(bill.amount || 0).toFixed(2)}`,
+            `Original amount: $${(parseFloat(bill.amount) || 0).toFixed(2)}`,
             `Estimated savings: ~$${estimatedSavings.toFixed(2)}`,
             ``,
             `Log in to BillAxe to see the full call summary.`,
@@ -83,6 +85,7 @@ async function run() {
 
     console.log(`[bot-14] [SUCCESS] ${emailsSent} success notifications sent, ${emailsFailed} failed`);
     return { success: true, emails_sent: emailsSent, emails_failed: emailsFailed };
+
   } catch (err) {
     console.log(`[bot-14] [FATAL] ${err.message}`);
     return { success: false, error: err.message };
