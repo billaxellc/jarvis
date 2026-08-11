@@ -1,25 +1,6 @@
 """
 BillAxe Instagram Growth Bot — Playwright browser automation.
-Uses a saved browser session (cookie injection) to authenticate with Instagram,
-then browses hashtag feeds and posts helpful comments that occasionally mention BillAxe.
-No Instagram password needed at runtime.
-
-Run:
-    python -u python-bots/instagram-bot.py
-
-Setup (one-time):
-    1. Open Chrome logged into billaxellc on instagram.com
-    2. Install the free 'Cookie-Editor' extension from the Chrome Web Store
-    3. Click the extension icon on instagram.com → Export → Export as JSON
-    4. Paste into python-bots/instagram_cookies.json and save
-    Cookies typically last 2–4 weeks before needing a refresh.
-
-Env vars required:
-    AI_INTEGRATIONS_OPENAI_API_KEY  — OpenAI API key (via Replit AI integration)
-    AI_INTEGRATIONS_OPENAI_BASE_URL — OpenAI base URL (via Replit AI integration)
-
-Cookie file:
-    python-bots/instagram_cookies.json  — exported from a logged-in Chrome session
+Railway-ready: cookies from INSTAGRAM_COOKIES_JSON env var, comments via Gemini.
 """
 
 import os
@@ -29,16 +10,12 @@ import random
 import datetime
 from pathlib import Path
 
+import google.generativeai as genai
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
-from openai import OpenAI
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-OPENAI_API_KEY  = os.environ.get("AI_INTEGRATIONS_OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.environ.get("AI_INTEGRATIONS_OPENAI_BASE_URL") or None
-COOKIES_FILE    = Path("python-bots/instagram_cookies.json")
-
-# ── Config ────────────────────────────────────────────────────────────────────
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 
 HASHTAGS = [
     "savemoney",
@@ -53,27 +30,20 @@ HASHTAGS = [
     "cuttingcosts",
 ]
 
-BILLAXE_MENTIONS = [
-    "BillAxe saved me $45 on my Xfinity bill last month if you haven't tried it yet",
-    "also BillAxe is really good for this — negotiated my ATT bill automatically",
-    "random but BillAxe handled this exact thing for me, saved like $80",
-    "btw BillAxe caught a hidden charge on my bill I never noticed, saved $30/mo",
-    "BillAxe literally did this for me automatically without having to call anyone",
-]
+RESULTS_DIR    = Path("/tmp/billaxe-instagram")
+COMMENTED_FILE = RESULTS_DIR / "commented_instagram_posts.json"
+LOG_FILE       = RESULTS_DIR / "instagram_log.json"
 
-RESULTS_DIR     = Path("python-bots")
-COMMENTED_FILE  = RESULTS_DIR / "commented_instagram_posts.json"
-LOG_FILE        = RESULTS_DIR / "instagram_log.json"
+WAIT_MIN = 15 * 60
+WAIT_MAX = 30 * 60
 
-WAIT_MIN = 15 * 60   # 15 minutes
-WAIT_MAX = 30 * 60   # 30 minutes
+# ── Gemini setup ──────────────────────────────────────────────────────────────
 
-# Nix-installed Chromium in the Replit environment
-NIX_CHROMIUM = "/nix/store/qa9cnw4v5xkxyip6mb9kxqfq1z4x2dx1-chromium-138.0.7204.100/bin/chromium"
+def get_gemini_model():
+    genai.configure(api_key=GOOGLE_API_KEY)
+    return genai.GenerativeModel("gemini-1.5-flash")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 def load_json(path: Path, default):
     if path.exists():
@@ -86,8 +56,7 @@ def load_json(path: Path, default):
 def save_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2))
 
-def log_action(hashtag: str, post_url: str, caption_snippet: str,
-               comment: str, mentioned_billaxe: bool, status: str, error: str = ""):
+def log_action(hashtag, post_url, caption_snippet, comment, mentioned_billaxe, status, error=""):
     log = load_json(LOG_FILE, [])
     log.append({
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
@@ -100,66 +69,44 @@ def log_action(hashtag: str, post_url: str, caption_snippet: str,
         "error": error,
     })
     save_json(LOG_FILE, log)
-    label = status.upper()
-    print(f"[{label}] #{hashtag} | billaxe={mentioned_billaxe} | {caption_snippet[:50]}")
+    print(f"[{status.upper()}] #{hashtag} | billaxe={mentioned_billaxe} | {caption_snippet[:50]}")
 
-def generate_comment(caption: str, include_billaxe: bool) -> str:
+def generate_comment(model, caption: str, include_billaxe: bool) -> str:
     billaxe_instruction = (
         " At the very end add exactly one casual sentence as a natural afterthought mentioning BillAxe "
         "(e.g. 'BillAxe saved me $45 on my Xfinity bill last month if you haven't tried it yet'). "
         "Never make it the focus — one sentence, sounds like an afterthought."
         if include_billaxe else ""
     )
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful Instagram commenter who genuinely cares about saving people money. "
-                    "Read the post caption below and write a short conversational comment that adds real value. "
-                    "Sound like a real person. Casual, warm, 1-2 sentences max. Never sound like a bot or marketer."
-                    + billaxe_instruction
-                ),
-            },
-            {"role": "user", "content": f"Post caption: {caption[:600]}"},
-        ],
-        max_tokens=120,
+    prompt = (
+        "You are a helpful Instagram commenter who genuinely cares about saving people money. "
+        "Read the post caption below and write a short conversational comment that adds real value. "
+        "Sound like a real person. Casual, warm, 1-2 sentences max. Never sound like a bot or marketer."
+        + billaxe_instruction
+        + f"\n\nPost caption: {caption[:600]}"
     )
-    return response.choices[0].message.content.strip()
+    response = model.generate_content(prompt)
+    return response.text.strip()
 
 # ── Cookie-based session restore ──────────────────────────────────────────────
 
 def load_session(context):
-    """
-    Inject saved Instagram cookies into the browser context so the bot
-    starts already logged in — no password needed at runtime.
+    cookies_json = os.environ.get("INSTAGRAM_COOKIES_JSON", "")
+    if not cookies_json:
+        raise RuntimeError("INSTAGRAM_COOKIES_JSON environment variable not set.")
 
-    Cookie file: python-bots/instagram_cookies.json
-    How to export (one-time setup):
-      1. Open Chrome logged into billaxellc on instagram.com
-      2. Install the free 'Cookie-Editor' extension from the Chrome Web Store
-      3. Click the extension icon → Export → Export as JSON
-      4. Paste the JSON array into python-bots/instagram_cookies.json
-      Cookies typically stay valid 2–4 weeks before needing a refresh.
-    """
-    if not COOKIES_FILE.exists():
-        raise FileNotFoundError(
-            f"{COOKIES_FILE} not found.\n"
-            "Export your Instagram cookies from Chrome and save them there."
-        )
+    try:
+        raw = json.loads(cookies_json)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"INSTAGRAM_COOKIES_JSON is not valid JSON: {e}")
 
-    raw = json.loads(COOKIES_FILE.read_text())
     cookies = [c for c in raw if "name" in c and "value" in c]
     if not cookies:
-        raise ValueError(
-            f"{COOKIES_FILE} still contains the placeholder instructions.\n"
-            "Replace it with real exported cookies from Chrome."
-        )
+        raise ValueError("INSTAGRAM_COOKIES_JSON contains no valid cookies.")
 
     pw_cookies = []
     for c in cookies:
-        cookie: dict = {
+        cookie = {
             "name":   c.get("name", ""),
             "value":  c.get("value", ""),
             "domain": c.get("domain", ".instagram.com"),
@@ -176,43 +123,31 @@ def load_session(context):
         pw_cookies.append(cookie)
 
     context.add_cookies(pw_cookies)
-    print(f"[SESSION] Injected {len(pw_cookies)} cookies from {COOKIES_FILE}")
+    print(f"[SESSION] Injected {len(pw_cookies)} cookies from INSTAGRAM_COOKIES_JSON")
     return len(pw_cookies)
 
 def verify_session(page) -> bool:
-    """Navigate to Instagram home and confirm we're logged in."""
     page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30000)
     time.sleep(2)
-    # Logged-in state: no redirect to /accounts/login/
     if "login" in page.url:
         print("[SESSION] ❌ NOT logged in — cookies may be expired")
         return False
-    # Additional check: profile nav link present
     signed_in = page.query_selector("a[href*='/direct/'] , svg[aria-label='Home']") is not None
     print(f"[SESSION] Instagram logged-in check: {'✅ signed in' if signed_in else '⚠️ uncertain — continuing anyway'}")
     return True
 
 def _log_alert(message: str):
     log = load_json(LOG_FILE, [])
-    log.append({
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-        "alert": message,
-    })
+    log.append({"timestamp": datetime.datetime.utcnow().isoformat() + "Z", "alert": message})
     save_json(LOG_FILE, log)
     print(f"[ALERT] {message}")
 
-# ── Browse hashtag and collect post URLs ──────────────────────────────────────
+# ── Browse hashtag ────────────────────────────────────────────────────────────
 
-def get_hashtag_posts(page, hashtag: str, max_posts: int = 12) -> list[dict]:
-    """Returns list of {url, caption} dicts from the hashtag's Recent section.
-
-    Tries multiple selectors in order so the bot survives Instagram layout changes.
-    If none work, saves a debug screenshot to /tmp/ig-debug.png.
-    """
+def get_hashtag_posts(page, hashtag: str, max_posts: int = 12) -> list:
     page.goto(f"https://www.instagram.com/explore/tags/{hashtag}/", wait_until="domcontentloaded", timeout=30000)
     time.sleep(3)
 
-    # Check for rate-limit / action block
     if any(kw in page.url for kw in ["challenge", "checkpoint"]):
         _log_alert(f"Challenge page when browsing #{hashtag}: {page.url}")
         return []
@@ -225,14 +160,14 @@ def get_hashtag_posts(page, hashtag: str, max_posts: int = 12) -> list[dict]:
         "a[href*='/p/']",
     ]
 
-    def extract_posts(links) -> list[dict]:
-        seen_hrefs: set = set()
+    def extract_posts(links):
+        seen = set()
         found = []
         for link in links:
             href = link.get_attribute("href") or ""
-            if "/p/" not in href or href in seen_hrefs:
+            if "/p/" not in href or href in seen:
                 continue
-            seen_hrefs.add(href)
+            seen.add(href)
             url = "https://www.instagram.com" + href.split("?")[0].rstrip("/") + "/"
             found.append({"url": url, "caption": ""})
             if len(found) >= max_posts:
@@ -247,7 +182,6 @@ def get_hashtag_posts(page, hashtag: str, max_posts: int = 12) -> list[dict]:
             page.wait_for_selector(sel, timeout=6000)
         except PWTimeout:
             continue
-
         links = page.query_selector_all(sel)
         candidates = extract_posts(links)
         if candidates:
@@ -255,33 +189,21 @@ def get_hashtag_posts(page, hashtag: str, max_posts: int = 12) -> list[dict]:
             matched_selector = sel
             print(f"[HASHTAG] Selector matched: '{sel}'")
             break
-        # selector present but zero /p/ links — try next
-        print(f"[HASHTAG] Selector '{sel}' found elements but no /p/ links — trying next")
-
-    if not posts:
-        debug_path = "/tmp/ig-debug.png"
-        try:
-            page.screenshot(path=debug_path, full_page=True)
-            print(f"[HASHTAG] ⚠️ All selectors failed for #{hashtag} — debug screenshot saved to {debug_path}")
-        except Exception as e:
-            print(f"[HASHTAG] ⚠️ All selectors failed and screenshot also failed: {e}")
 
     print(f"[HASHTAG] #{hashtag} → {len(posts)} posts" + (f" (via '{matched_selector}')" if matched_selector else ""))
     return posts
 
-# ── Open a post and read its caption ─────────────────────────────────────────
+# ── Get post caption ──────────────────────────────────────────────────────────
 
 def get_post_caption(page, post_url: str) -> str:
     page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
     time.sleep(2)
 
-    # Check for unexpected redirects (rate-limit / challenge)
     if any(kw in page.url for kw in ["challenge", "checkpoint"]):
         _log_alert(f"Challenge page when opening post: {page.url}")
         return ""
 
     try:
-        # Caption lives in h1 or the article's first span
         for sel in ["h1", "article div span", "div._a9zs span"]:
             el = page.query_selector(sel)
             if el:
@@ -292,18 +214,16 @@ def get_post_caption(page, post_url: str) -> str:
         pass
     return ""
 
-# ── Post a comment ────────────────────────────────────────────────────────────
+# ── Post comment ──────────────────────────────────────────────────────────────
 
 def post_comment(page, comment_text: str) -> bool:
     try:
-        # Click the comment icon or the comment text area
         try:
             page.click("svg[aria-label='Comment']", timeout=5000)
             time.sleep(1)
         except PWTimeout:
             pass
 
-        # Find the comment textarea
         textarea = page.wait_for_selector(
             "textarea[placeholder], textarea[aria-label*='omment']",
             timeout=10000,
@@ -311,8 +231,6 @@ def post_comment(page, comment_text: str) -> bool:
         textarea.click()
         time.sleep(0.5)
 
-        # Instagram's comment box is a contenteditable div on some views
-        # Fall back to contenteditable if textarea isn't writable
         try:
             textarea.fill(comment_text)
         except Exception:
@@ -320,11 +238,9 @@ def post_comment(page, comment_text: str) -> bool:
 
         time.sleep(1)
 
-        # Submit via Enter key or the Post button
         try:
             post_btn = page.wait_for_selector(
-                "//button[contains(text(),'Post') or contains(text(),'post')]"
-                " | button[type='submit']",
+                "//button[contains(text(),'Post') or contains(text(),'post')] | button[type='submit']",
                 timeout=5000,
             )
             post_btn.click()
@@ -344,19 +260,17 @@ def post_comment(page, comment_text: str) -> bool:
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def run():
-    if not OPENAI_API_KEY:
-        raise RuntimeError("AI_INTEGRATIONS_OPENAI_API_KEY env var must be set.")
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY env var must be set.")
 
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    commented: set = set(load_json(COMMENTED_FILE, []))
+    commented = set(load_json(COMMENTED_FILE, []))
     mention_counter = 0
-
-    chrome_bin = NIX_CHROMIUM if Path(NIX_CHROMIUM).exists() else None
+    model = get_gemini_model()
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
             headless=True,
-            executable_path=chrome_bin,
             args=[
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
@@ -377,12 +291,11 @@ def run():
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
 
-        # Inject saved cookies — no password login needed
         load_session(context)
         page = context.new_page()
 
         if not verify_session(page):
-            print("[SESSION] Cookies appear expired. Re-export from Chrome and update instagram_cookies.json.")
+            print("[SESSION] Cookies expired. Update INSTAGRAM_COOKIES_JSON and redeploy.")
             browser.close()
             return
 
@@ -402,12 +315,10 @@ def run():
 
                 try:
                     caption = get_post_caption(page, url)
-
                     if not caption:
                         print(f"[SKIP] No caption found: {url}")
                         continue
 
-                    # Check for mid-session security challenge
                     if any(kw in page.url for kw in ["challenge", "checkpoint", "suspicious"]):
                         _log_alert(f"Security check mid-session: {page.url}")
                         print("[ALERT] Security check — stopping.")
@@ -416,8 +327,7 @@ def run():
 
                     mention_counter += 1
                     include_billaxe = (mention_counter % 3 == 0)
-
-                    comment_text = generate_comment(caption, include_billaxe)
+                    comment_text = generate_comment(model, caption, include_billaxe)
 
                     success = post_comment(page, comment_text)
 
