@@ -6,6 +6,7 @@
 const cron = require('node-cron');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { Resend } = require('resend');
 
 const botReports = new Map();
@@ -81,6 +82,8 @@ async function sendDailyReport() {
     emailBody += `❌ ${bot}: ${error.error}\n`;
     failCount++;
   }
+
+  emailBody += `\n📸 Instagram Bot: ${instagramBotRunning ? '✅ Running' : '❌ Down'}\n`;
   
   emailBody += `\nSUMMARY: ${successCount} successful, ${failCount} failed\n`;
   
@@ -110,6 +113,41 @@ async function executeBotSafely(botName, botObj) {
     });
     console.log(`[${botName}] [ERROR] ${err.message}`);
   }
+}
+
+// ── Instagram Bot — continuous subprocess ─────────────────────────────────────
+
+let instagramBotRunning = false;
+
+function startInstagramBot() {
+  const scriptPath = path.join(__dirname, '..', 'python-bots', 'instagram-bot.py');
+
+  if (!fs.existsSync(scriptPath)) {
+    console.log('[bot-20-instagram] [ERROR] Script not found:', scriptPath);
+    return;
+  }
+
+  console.log('[bot-20-instagram] [START] Launching Instagram bot...');
+  instagramBotRunning = true;
+
+  const python = spawn('python3', [scriptPath], {
+    stdio: 'inherit',
+    env: { ...process.env }
+  });
+
+  python.on('error', (err) => {
+    console.log(`[bot-20-instagram] [ERROR] ${err.message}`);
+    instagramBotRunning = false;
+    // Retry after 5 minutes
+    console.log('[bot-20-instagram] Retrying in 5 minutes...');
+    setTimeout(startInstagramBot, 5 * 60 * 1000);
+  });
+
+  python.on('exit', (code) => {
+    instagramBotRunning = false;
+    console.log(`[bot-20-instagram] [EXIT] Code ${code} — restarting in 5 minutes...`);
+    setTimeout(startInstagramBot, 5 * 60 * 1000);
+  });
 }
 
 function scheduleBots() {
@@ -199,10 +237,11 @@ function scheduleBots() {
 setInterval(() => {
   const successCount = Array.from(botReports.values()).filter(r => r.status === 'SUCCESS').length;
   const failCount = botErrors.size;
-  console.log(`[manager-bot] [HEARTBEAT] Bots: ${Object.keys(bots).length} scheduled | Success: ${successCount} | Failed: ${failCount}`);
+  console.log(`[manager-bot] [HEARTBEAT] Bots: ${Object.keys(bots).length} scheduled | Success: ${successCount} | Failed: ${failCount} | Instagram: ${instagramBotRunning ? '🟢' : '🔴'}`);
 }, 60000);
 
 console.log('[manager-bot] [INFO] BillAxe Bot Manager starting up');
 sendStartupTest();
 scheduleBots();
+startInstagramBot();
 console.log('[manager-bot] [INFO] All bots scheduled and monitoring');
