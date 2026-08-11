@@ -10,7 +10,7 @@ import random
 import datetime
 from pathlib import Path
 
-import google.generativeai as genai
+from google import genai
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -40,8 +40,7 @@ WAIT_MAX = 30 * 60
 # ── Gemini setup ──────────────────────────────────────────────────────────────
 
 def get_gemini_model():
-    genai.configure(api_key=GOOGLE_API_KEY)
-    return genai.GenerativeModel("gemini-1.5-flash")
+    return genai.Client(api_key=GOOGLE_API_KEY)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -85,7 +84,7 @@ def generate_comment(model, caption: str, include_billaxe: bool) -> str:
         + billaxe_instruction
         + f"\n\nPost caption: {caption[:600]}"
     )
-    response = model.generate_content(prompt)
+    response = model.models.generate_content(model="gemini-1.5-flash", contents=prompt)
     return response.text.strip()
 
 # ── Cookie-based session restore ──────────────────────────────────────────────
