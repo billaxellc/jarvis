@@ -1,6 +1,6 @@
 /**
  * MANAGER.JS - BillAxe Bot Orchestration
- * Loads all 19 bots, schedules them on correct times, executes them
+ * Loads all 20 bots, schedules them on correct times, executes them
  * Sends daily email report via Resend
  */
 const cron = require('node-cron');
@@ -138,7 +138,6 @@ function startInstagramBot() {
   python.on('error', (err) => {
     console.log(`[bot-20-instagram] [ERROR] ${err.message}`);
     instagramBotRunning = false;
-    // Retry after 5 minutes
     console.log('[bot-20-instagram] Retrying in 5 minutes...');
     setTimeout(startInstagramBot, 5 * 60 * 1000);
   });
@@ -226,6 +225,10 @@ function scheduleBots() {
   if (bots['bot-19-manager']) {
     cron.schedule('0 13 * * *', () => executeBotSafely('bot-19-manager', bots['bot-19-manager']));
     console.log('[manager-bot] [SCHEDULE] bot-19 @ 1:00 PM UTC (6 AM Phoenix)');
+  }
+  if (bots['bot-21-content-engine']) {
+    cron.schedule('0 13 * * *', () => executeBotSafely('bot-21-content-engine', bots['bot-21-content-engine']));
+    console.log('[manager-bot] [SCHEDULE] bot-21 @ 1:00 PM UTC (6 AM Phoenix)');
   }
 
   // Daily report - 1 PM UTC = 6 AM Phoenix
