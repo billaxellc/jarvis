@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const { Resend } = require('resend');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const PILLARS = [
   'medical',
@@ -50,25 +51,17 @@ async function saveRotationState(supabase, state) {
   }
 }
 
-async function generateScript(openai, pillar) {
+async function generateScript(gemini, pillar) {
   const prompt = PROMPTS[pillar] || PROMPTS.bill_negotiation;
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'user', content: prompt }],
-    max_tokens: 100,
-    temperature: 0.7
-  });
+  const model = gemini.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-  let script = response.choices[0].message.content.trim();
+  const result = await model.generateContent(prompt);
+  let script = result.response.text().trim();
 
   const words = script.split(/\s+/).length;
   if (words > 28) {
-    const trimResponse = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
-      messages: [{ role: 'user', content: 'Rewrite this in EXACTLY 28 words: ' + script }],
-      max_tokens: 50
-    });
-    script = trimResponse.choices[0].message.content.trim();
+    const trimResult = await model.generateContent('Rewrite this in EXACTLY 28 words: ' + script);
+    script = trimResult.response.text().trim();
   }
 
   script = script.replace(/\$/g, '').replace(/\b(she|her|he|him)\b/gi, 'they');
@@ -109,10 +102,9 @@ async function sendApprovalEmail(resend, videoId, script, pillar) {
 async function run() {
   console.log('[BOT-21] [START] Content Engine Daily Generator');
 
-  // Lazy-init all clients inside run() so load-time never crashes
   const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
   const resend   = new Resend(process.env.RESEND_API_KEY);
-  const openai   = new (require('openai').default)({ apiKey: process.env.OPENAI_API_KEY });
+  const gemini   = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
 
   let state = await getRotationState(supabase);
   let emailsSent = 0;
@@ -140,7 +132,7 @@ async function run() {
     state.script_count += 1;
 
     try {
-      const script = await generateScript(openai, pillar);
+      const script = await generateScript(gemini, pillar);
 
       const { data: video, error } = await supabase
         .from('content_videos')
